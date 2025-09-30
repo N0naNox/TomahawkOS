@@ -1,3 +1,8 @@
+#include <efi.h>
+#include <efilib.h>
+
+
+
 typedef unsigned long long UINTN;
 typedef unsigned short CHAR16;
 typedef void* EFI_HANDLE;
