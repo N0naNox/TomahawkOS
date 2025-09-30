@@ -107,6 +107,7 @@
       <ConformanceMode>true</ConformanceMode>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>C:\Users\Cyber_User\Documents\Magshimim\Year3\TomahawkOS\UEFI Bootloader\ThirdParty\gnu-efi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>EFI Application</SubSystem>
