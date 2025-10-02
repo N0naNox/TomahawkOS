@@ -115,6 +115,9 @@
       <EntryPointSymbol>efi_main</EntryPointSymbol>
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <DataExecutionPrevention>false</DataExecutionPrevention>
+      <AdditionalLibraryDirectories>C:\Users\Cyber_User\Downloads\gnu-efi-3.0.18\x86_64\lib;C:\Users\Cyber_User\Downloads\gnu-efi-3.0.18\x86_64\gnuefi;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libefi.a;libgnuefi.a;%(AdditionalDependencies)</AdditionalDependencies>
+      <OutputFile>$(OutDir)\$(ProjectName).efi</OutputFile>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
