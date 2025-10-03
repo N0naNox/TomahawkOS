@@ -1,5 +1,6 @@
 #include <efi.h>
 #include <efilib.h>
+#include "elf.h"
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable) {
     EFI_STATUS Status;
@@ -116,6 +117,24 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
 
     uefi_call_wrapper(KernelFile->Close, 1, KernelFile);
     FreePool(FileInfo);
+
+
+	Elf64_Ehdr* elfHeader = (Elf64_Ehdr*)KernelBuffer;
+    Print(L"Entry point: 0x%llx\n", elfHeader->e_entry);
+
+    Elf64_Phdr* programHeaders = (Elf64_Phdr*)((UINT8*)KernelBuffer + elfHeader->e_phoff);
+    for (int i = 0; i < elfHeader->e_phnum; i++) {
+        Elf64_Phdr* phdr = &programHeaders[i];
+
+        if (phdr->p_type == PT_LOAD) {  // Only load LOAD segments
+            void* source = (void*)((UINT8*)KernelBuffer + phdr->p_offset);
+            void* dest = (void*)phdr->p_paddr;  // or p_vaddr if using virtual addressing
+            CopyMem(dest, source, phdr->p_filesz);
+        }
+    }
+
+
+
 
     Print(L"Bootloader finished (dummy load only)\n");
     Print(L"Press any key to exit...\n");
