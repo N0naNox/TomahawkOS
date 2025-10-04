@@ -120,30 +120,156 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
 
 
 	Elf64_Ehdr* elfHeader = (Elf64_Ehdr*)KernelBuffer;
+
+    if (elfHeader->e_ident[0] != 0x7F ||
+        elfHeader->e_ident[1] != 'E' ||
+        elfHeader->e_ident[2] != 'L' ||
+        elfHeader->e_ident[3] != 'F') {
+        Print(L"ERROR: Not a valid ELF file!\n");
+        FreePool(KernelBuffer);
+        return EFI_INVALID_PARAMETER;
+    }
+
+
+    Print(L"Valid ELF file detected\n");
     Print(L"Entry point: 0x%llx\n", elfHeader->e_entry);
+    Print(L"Program headers: %d at offset 0x%llx\n", elfHeader->e_phnum, elfHeader->e_phoff);
+
 
     Elf64_Phdr* programHeaders = (Elf64_Phdr*)((UINT8*)KernelBuffer + elfHeader->e_phoff);
-    for (int i = 0; i < elfHeader->e_phnum; i++) {
+    for (UINT16 i = 0; i < elfHeader->e_phnum; i++) {
         Elf64_Phdr* phdr = &programHeaders[i];
 
         if (phdr->p_type == PT_LOAD) {  // Only load LOAD segments
             void* source = (void*)((UINT8*)KernelBuffer + phdr->p_offset);
             void* dest = (void*)phdr->p_paddr;  // or p_vaddr if using virtual addressing
+            
+            // Allocate pages at the destination address
+            UINTN pages = (phdr->p_memsz + 4095) / 4096;  
+            Status = uefi_call_wrapper(BS->AllocatePages, 4,
+                AllocateAddress,
+                EfiLoaderData,
+                pages,
+                (EFI_PHYSICAL_ADDRESS*)&dest);
+
+            if (EFI_ERROR(Status)) {
+                Print(L"Failed to allocate pages at 0x%llx: %r\n", phdr->p_paddr, Status);
+                // Try allocating anywhere
+                Status = uefi_call_wrapper(BS->AllocatePages, 4,
+                    AllocateAnyPages,
+                    EfiLoaderData,
+                    pages,
+                    (EFI_PHYSICAL_ADDRESS*)&dest);
+                if (EFI_ERROR(Status)) {
+                    Print(L"Failed to allocate pages: %r\n", Status);
+                    FreePool(KernelBuffer);
+                    return Status;
+                }
+                Print(L"Allocated at 0x%p instead\n", dest);
+            }
+
             CopyMem(dest, source, phdr->p_filesz);
+
+            // Zero out any remaining space (BSS section)
+            if (phdr->p_memsz > phdr->p_filesz) {
+                SetMem((UINT8*)dest + phdr->p_filesz, phdr->p_memsz - phdr->p_filesz, 0);
+            }
+
+            Print(L"Segment %d loaded successfully\n", i);
         }
     }
 
 
+    UINTN MemoryMapSize = 0;
+    EFI_MEMORY_DESCRIPTOR* MemoryMap = NULL;
+    UINTN MapKey;
+    UINTN DescriptorSize;
+    UINT32 DescriptorVersion;
 
 
-    Print(L"Bootloader finished (dummy load only)\n");
-    Print(L"Press any key to exit...\n");
+    Status = uefi_call_wrapper(BS->GetMemoryMap, 5,
+        &MemoryMapSize,
+        MemoryMap,
+        &MapKey,
+        &DescriptorSize,
+        &DescriptorVersion);
 
-    // Wait for a key press
-    EFI_INPUT_KEY Key;
-    while ((Status = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &Key)) == EFI_NOT_READY) {
-        // Wait for key
+    if (Status == EFI_BUFFER_TOO_SMALL) {
+
+		MemoryMapSize += DescriptorSize * 2; // Add some extra space
+		Status = uefi_call_wrapper(BS->AllocatePool, 3,
+			EfiLoaderData,
+			MemoryMapSize,
+			(void**)&MemoryMap);
+		if (EFI_ERROR(Status)) {
+			Print(L"Failed to allocate memory for memory map: %r\n", Status);
+			FreePool(KernelBuffer);
+			return Status;
+		}
+		Status = uefi_call_wrapper(BS->GetMemoryMap, 5,
+			&MemoryMapSize,
+			MemoryMap,
+			&MapKey,
+			&DescriptorSize,
+			&DescriptorVersion);
+		if (EFI_ERROR(Status)) {
+			Print(L"Failed to get memory map: %r\n", Status);
+			FreePool(MemoryMap);
+			FreePool(KernelBuffer);
+			return Status;
+		}
+	}
+	else if (EFI_ERROR(Status)) {
+		Print(L"Failed to get memory map size: %r\n", Status);
+		FreePool(KernelBuffer);
+		return Status;
+    
     }
+
+    Print(L"Memory map obtained, size: %llu bytes\n", (unsigned long long)MemoryMapSize);
+
+
+    Print(L"Exiting boot services...\n");
+    Status = uefi_call_wrapper(BS->ExitBootServices, 2, ImageHandle, MapKey);
+    if (EFI_ERROR(Status)) {
+        Print(L"Failed to exit boot services: %r\n", Status);
+        Print(L"This is expected - memory map may have changed.\n");
+
+        // Memory map changed, get it again
+        Status = uefi_call_wrapper(BS->GetMemoryMap, 5,
+            &MemoryMapSize,
+            MemoryMap,
+            &MapKey,
+            &DescriptorSize,
+            &DescriptorVersion);
+
+        if (!EFI_ERROR(Status)) {
+            Status = uefi_call_wrapper(BS->ExitBootServices, 2, ImageHandle, MapKey);
+        }
+
+        if (EFI_ERROR(Status)) {
+            Print(L"Still failed to exit boot services: %r\n", Status);
+            FreePool(MemoryMap);
+            FreePool(KernelBuffer);
+            return Status;
+        }
+    }
+
+
+    uint64_t entry = elfHeader->e_entry;
+
+    Print(L"Jumping to kernel at 0x%llx\n", entry);
+
+    void (*kernel_main)(void) = (void(*)(void))entry;
+
+    kernel_main();
+
+	//if for some reason kernel returns, halt
+
+    while (1) {
+        __asm__("hlt");
+    }
+
 
     return EFI_SUCCESS;
 }
