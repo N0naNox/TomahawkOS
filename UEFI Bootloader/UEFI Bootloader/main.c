@@ -136,6 +136,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     Print(L"Program headers: %d at offset 0x%llx\n", elfHeader->e_phnum, elfHeader->e_phoff);
 
 
+    //Load the program headers of the kernel - actual code
     Elf64_Phdr* programHeaders = (Elf64_Phdr*)((UINT8*)KernelBuffer + elfHeader->e_phoff);
     for (UINT16 i = 0; i < elfHeader->e_phnum; i++) {
         Elf64_Phdr* phdr = &programHeaders[i];
@@ -179,7 +180,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         }
     }
 
-
+    //Obtain a memory map
     UINTN MemoryMapSize = 0;
     EFI_MEMORY_DESCRIPTOR* MemoryMap = NULL;
     UINTN MapKey;
