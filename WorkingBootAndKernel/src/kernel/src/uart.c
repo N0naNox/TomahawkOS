@@ -106,3 +106,24 @@ void uart_puthex(uint64_t val)
 
 	}
 }
+
+void uart_putu(uint64_t value)
+{
+    char buffer[21];  // enough for 64-bit unsigned int (max 20 digits)
+    int pos = 0;
+
+    if (value == 0) {
+        uart_putchar('0');
+        return;
+    }
+
+    while (value > 0) {
+        buffer[pos++] = '0' + (value % 10);
+        value /= 10;
+    }
+
+    // Print digits in reverse
+    for (int i = pos - 1; i >= 0; i--) {
+        uart_putchar(buffer[i]);
+    }
+}

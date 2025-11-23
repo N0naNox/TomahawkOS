@@ -14,18 +14,18 @@ bit 4: I/D = instruction fetch
 
 static void decode_error(uint64_t code)
 {
-    uart_puts("  Present:      "); uart_putu(code & 1); uart_putc('\n');
-    uart_puts("  Write:        "); uart_putu((code >> 1) & 1); uart_putc('\n');
-    uart_puts("  User:         "); uart_putu((code >> 2) & 1); uart_putc('\n');
-    uart_puts("  Reserved bit: "); uart_putu((code >> 3) & 1); uart_putc('\n');
-    uart_puts("  Instr fetch:  "); uart_putu((code >> 4) & 1); uart_putc('\n');
+    uart_puts("  Present:      "); uart_putu(code & 1); uart_putchar('\n');
+    uart_puts("  Write:        "); uart_putu((code >> 1) & 1); uart_putchar('\n');
+    uart_puts("  User:         "); uart_putu((code >> 2) & 1); uart_putchar('\n');
+    uart_puts("  Reserved bit: "); uart_putu((code >> 3) & 1); uart_putchar('\n');
+    uart_puts("  Instr fetch:  "); uart_putu((code >> 4) & 1); uart_putchar('\n');
 }
 
-void page_fault_handler(uint64_t error_code, uint64_t faulting_address)
+int page_fault_handler(uint64_t error_code, uint64_t faulting_address)
 {
     uart_puts("\n===== PAGE FAULT =====\n");
-    uart_puts("Faulting address: 0x"); uart_puthex(faulting_address); uart_putc('\n');
-    uart_puts("Error code:       0x"); uart_puthex(error_code); uart_putc('\n');
+    uart_puts("Faulting address: 0x"); uart_puthex(faulting_address); uart_putchar('\n');
+    uart_puts("Error code:       0x"); uart_puthex(error_code); uart_putchar('\n');
 
     decode_error(error_code);
 
@@ -89,7 +89,7 @@ int page_not_present_handler(uint64_t faulting_address)
 
     uart_puts("Mapped missing page: 0x");
     uart_puthex(faulting_address);
-    uart_putc('\n');
+    uart_putchar('\n');
 
     return 0;
 }

@@ -1,4 +1,4 @@
-#ifdef PAGE_FAULT_HANDLER_H
+#ifndef PAGE_FAULT_HANDLER_H
 #define PAGE_FAULT_HANDLER_H
 
 #include <stdint.h>
