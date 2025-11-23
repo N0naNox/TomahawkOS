@@ -203,3 +203,10 @@ void paging_free_pml4(uintptr_t pml4_phys) {
     (void)pml4_phys;
     /* Implement recursively walking and freeing child tables if you want. */
 }
+
+
+uintptr_t paging_get_current_cr3() {
+    uintptr_t cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    return cr3;
+}

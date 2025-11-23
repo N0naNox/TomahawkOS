@@ -47,6 +47,9 @@ int paging_map_range(uintptr_t pml4_phys, uint64_t vaddr, uintptr_t paddr, size_
 /* Unmap one page (clears PT entry). Does not free page-table pages. */
 int paging_unmap_page(uintptr_t pml4_phys, uint64_t vaddr);
 
+// Get current CR3 (PML4 physical address)
+uintptr_t paging_get_current_cr3();
+
 /* Lookup: return physical address mapped to vaddr, or 0 if not mapped. Handles large pages. */
 uintptr_t paging_get_phys(uintptr_t pml4_phys, uint64_t vaddr);
 
@@ -57,5 +60,7 @@ static inline void paging_load_cr3(uintptr_t pml4_phys) {
 
 /* Optional helper to release a PML4 (not implemented automatically) */
 void paging_free_pml4(uintptr_t pml4_phys);
+
+
 
 #endif /* PAGING_H */

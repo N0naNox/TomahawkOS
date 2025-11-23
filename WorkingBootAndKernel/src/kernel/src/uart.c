@@ -17,6 +17,12 @@
 #define UART_PORT_COM1 0x3f8
 
 
+static char hex_digit(uint8_t nib)
+{
+    return (nib < 10) ? ('0' + nib) : ('A' + (nib - 10));
+}
+
+
 /**
  * uart_initialize
  */
@@ -81,5 +87,22 @@ void uart_puts(const char* str)
 	size_t str_len = strlen(str);
 	for(size_t i = 0; i < str_len; i++) {
 		uart_putchar(str[i]);
+	}
+}
+
+
+void uart_puthex(uint64_t val)
+{
+	uart_puts("0x");
+
+	bool started = false;
+	for (int i = 15; i >= 0; i--) {
+		uint8_t nib = (val >> (i * 4)) & 0xF;
+
+		if (nib != 0 || started || i == 0) {
+			uart_putchar(hex_digit(nib));
+			started = true;
+		}
+
 	}
 }
