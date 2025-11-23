@@ -4,7 +4,8 @@
 #pragma pack(push, 1)
 
 /* GDT entry structure (8 bytes) */
-typedef struct GDTEntry {
+typedef struct GDTEntry 
+{
     uint16_t limit_low;
     uint16_t base_low;
     uint8_t  base_middle;
@@ -14,7 +15,8 @@ typedef struct GDTEntry {
 } GDTEntry;
 
 /* GDTR structure (10 bytes) */
-typedef struct GDTPtr {
+typedef struct GDTPtr 
+{
     uint16_t limit;
     uint64_t base;
 } GDTPtr;
