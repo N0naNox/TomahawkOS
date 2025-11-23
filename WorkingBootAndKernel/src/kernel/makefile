@@ -49,6 +49,7 @@ C_SOURCES  :=              \
 	${SRC_DIR}/string.c      \
 	${SRC_DIR}/uart.c        \
 	${SRC_DIR}/paging.c      \
+	${SRC_DIR}/page_fault_handler.c \
 
 OBJECTS    := ${AS_SOURCES:.S=.o}
 OBJECTS    += ${C_SOURCES:.c=.o}
