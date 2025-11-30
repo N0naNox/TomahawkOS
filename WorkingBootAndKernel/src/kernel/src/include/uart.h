@@ -1,3 +1,4 @@
+#include "hal_port_io.h"
 /**
  * @file uart.h
  * @author ajxs

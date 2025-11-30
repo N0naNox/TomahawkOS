@@ -41,15 +41,18 @@ LDFLAGS :=          \
 LIBS := -lgcc
 
 
-AS_SOURCES :=
+AS_SOURCES := ${SRC_DIR}/idt.S
+NASM_SOURCES := ${SRC_DIR}/hal_port_io.asm
 
 C_SOURCES  :=              \
+	${SRC_DIR}/idt.c         \
+	${SRC_DIR}/hal_port_io.c \
 	${SRC_DIR}/kernel.c      \
-	${SRC_DIR}/port_io.c     \
 	${SRC_DIR}/string.c      \
 	${SRC_DIR}/uart.c
 
 OBJECTS    := ${AS_SOURCES:.S=.o}
+OBJECTS    += ${NASM_SOURCES:.asm=.o}
 OBJECTS    += ${C_SOURCES:.c=.o}
 
 BUILD_DIR  := build
@@ -68,6 +71,9 @@ ${BINARY}: ${BUILD_DIR} ${OBJECTS}
 
 %.o: %.c
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}
+
+%.o: %.asm
+	nasm -f elf64 $< -o $@
 
 ${BUILD_DIR}:
 	mkdir -p ${BUILD_DIR}
