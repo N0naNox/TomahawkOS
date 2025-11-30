@@ -51,6 +51,9 @@ C_SOURCES  :=              \
 	${SRC_DIR}/paging.c      \
 	${SRC_DIR}/page_fault_handler.c \
 	${SRC_DIR}/elf_loader.c \
+	${SRC_DIR}/mm.c        \
+	${SRC_DIR}/page_fault_handler_mm.c \
+	${SRC_DIR}/elf_loader_mm.c     \
 
 OBJECTS    := ${AS_SOURCES:.S=.o}
 OBJECTS    += ${C_SOURCES:.c=.o}
