@@ -1,29 +1,29 @@
 .section .text
 .p2align 4
+
+/* --------------------------------------------------
+ * idt_flush: load IDT
+ * Expects pointer to idt_ptr in %rdi
+ * -------------------------------------------------- */
 .global idt_flush
 .type idt_flush, @function
-/* idt_flush: load IDT. Expects pointer to idt_ptr in %rdi */
 idt_flush:
     cli
     lidt (%rdi)
     sti
     ret
 
-/*
- * Assembly stubs for ISRs/IRQs.
- * For interrupts that DO NOT push an error code, we push a dummy 0 first,
- * then push the interrupt number. For those that DO push an error code,
- * we only push the interrupt number so that the stack layout is uniform
- * when handed to the C handler.
- */
+/* --------------------------------------------------
+ * ISR/IRQ macros
+ * -------------------------------------------------- */
 
+/* ISR without error code */
 .macro ISR_NOERR num
-.globl isr\num
+.global isr\num
 .type isr\num, @function
 isr\num:
-    pushq $0
-    pushq $(\num)
-    /* save general purpose registers */
+    pushq $0                /* dummy error code */
+    pushq $\num             /* interrupt number */
     pushq %rax
     pushq %rbx
     pushq %rcx
@@ -41,17 +41,16 @@ isr\num:
     pushq %r15
     movq %rsp, %rdi
     call isr_common_handler
-    /* clean pushed regs + int_no/err_code (15*8 + 16 = 136) */
-    addq $136, %rsp
+    addq $136, %rsp         /* clean stack */
     iretq
 .endm
 
+/* ISR with error code */
 .macro ISR_ERR num
-.globl isr\num
+.global isr\num
 .type isr\num, @function
 isr\num:
-    pushq $(\num)
-    /* save general purpose registers */
+    pushq $\num             /* interrupt number only */
     pushq %rax
     pushq %rbx
     pushq %rcx
@@ -69,16 +68,15 @@ isr\num:
     pushq %r15
     movq %rsp, %rdi
     call isr_common_handler
-    /* clean pushed regs + int_no (15*8 + 8 = 128) */
     addq $128, %rsp
     iretq
 .endm
 
+/* IRQ stub (uses vector 32+num) */
 .macro IRQ_STUB num
-.globl irq\num
+.global irq\num
 .type irq\num, @function
 irq\num:
-    /* IRQs don't push error codes; follow NOERR pattern but use vector 32+num */
     pushq $0
     pushq $(32 + \num)
     pushq %rax
@@ -99,11 +97,13 @@ irq\num:
     movq %rsp, %rdi
     call isr_common_handler
     addq $136, %rsp
-    /* send EOI to PICs - done in C handler if desired; leaving out here */
     iretq
 .endm
 
-/* Exceptions 0..31. Some push error code: 8,10,11,12,13,14,17 */
+/* --------------------------------------------------
+ * Exceptions 0..31
+ * 8, 10, 11, 12, 13, 14, 17 push error code
+ * -------------------------------------------------- */
 ISR_NOERR 0
 ISR_NOERR 1
 ISR_NOERR 2
@@ -112,16 +112,16 @@ ISR_NOERR 4
 ISR_NOERR 5
 ISR_NOERR 6
 ISR_NOERR 7
-ISR_ERR 8
+ISR_ERR   8
 ISR_NOERR 9
-ISR_ERR 10
-ISR_ERR 11
-ISR_ERR 12
-ISR_ERR 13
-ISR_ERR 14
+ISR_ERR   10
+ISR_ERR   11
+ISR_ERR   12
+ISR_ERR   13
+ISR_ERR   14
 ISR_NOERR 15
 ISR_NOERR 16
-ISR_ERR 17
+ISR_ERR   17
 ISR_NOERR 18
 ISR_NOERR 19
 ISR_NOERR 20
@@ -137,7 +137,9 @@ ISR_NOERR 29
 ISR_NOERR 30
 ISR_NOERR 31
 
-/* IRQs 0..15 */
+/* --------------------------------------------------
+ * IRQs 0..15
+ * -------------------------------------------------- */
 IRQ_STUB 0
 IRQ_STUB 1
 IRQ_STUB 2

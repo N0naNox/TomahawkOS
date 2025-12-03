@@ -41,8 +41,9 @@ LDFLAGS :=          \
 LIBS := -lgcc
 
 
-AS_SOURCES := ${SRC_DIR}/idt.S
-NASM_SOURCES := ${SRC_DIR}/hal_port_io.asm
+AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
+NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}
+C_OBJECTS   := ${C_SOURCES:.c=.o}
 
 C_SOURCES  :=              \
 	${SRC_DIR}/idt.c         \
@@ -51,9 +52,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/string.c      \
 	${SRC_DIR}/uart.c
 
-OBJECTS    := ${AS_SOURCES:.S=.o}
-OBJECTS    += ${NASM_SOURCES:.asm=.o}
-OBJECTS    += ${C_SOURCES:.c=.o}
+OBJECTS := ${AS_OBJECTS} ${NASM_OBJECTS} ${C_OBJECTS}
+
 
 BUILD_DIR  := build
 BINARY     := ${BUILD_DIR}/kernel.elf
@@ -66,8 +66,9 @@ all: ${BINARY}
 ${BINARY}: ${BUILD_DIR} ${OBJECTS}
 	${CC} -T ${SRC_DIR}/kernel.ld -g3 -o ${BINARY} ${LDFLAGS} ${OBJECTS} ${LIBS}
 
-%.o: %.S
+%.as.o: %.S
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}
+
 
 %.o: %.c
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}

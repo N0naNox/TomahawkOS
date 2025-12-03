@@ -49,7 +49,7 @@ hal_outw_asm:
 hal_inl_asm:
     mov dx, di
     in eax, dx
-    movzx rax, eax
+    movzx rax, al
     ret
 
 ; void hal_outl_asm(uint16_t port, uint32_t value)
