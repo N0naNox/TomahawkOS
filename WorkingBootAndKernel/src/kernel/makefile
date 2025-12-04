@@ -86,3 +86,4 @@ ${BUILD_DIR}:
 clean:
 	rm -f ${OBJECTS}
 	rm -f ${BINARY}
+	rm -rf ${BUILD_DIR}
