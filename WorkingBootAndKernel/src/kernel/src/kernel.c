@@ -7,6 +7,8 @@
  */
 
 #include <stdint.h>
+#include "include/vga.h"
+#include "include/idt.h"
 #include <boot.h>
 #include <uart.h>
 
@@ -35,10 +37,21 @@ void kernel_main(Boot_Info* boot_info);
  */
 void kernel_main(Boot_Info* boot_info)
 {
-	// Initialise the UART.
+	/* Initialize VGA first so we have immediate on-screen output */
+	vga_init();
+	vga_write("Kernel: VGA initialized.\n");
+
+	/* Initialize UART for serial logging */
 	uart_initialize();
-	uart_puts("Kernel: LET'S GOOOOOOO RUNNING.\n");
+	uart_puts("Kernel: UART initialized.\n");
 
+	/* Install IDT (interrupts) */
+	idt_install();
+	vga_write("Kernel: IDT installed.\n");
+	uart_puts("Kernel: IDT installed.\n");
 
-	while(1);
+	/* Main idle loop - use HLT to save CPU until interrupts occur */
+	for (;;) {
+		__asm__ volatile("hlt");
+	}
 }

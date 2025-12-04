@@ -1,0 +1,199 @@
+; idt_asm.asm - NASM/Intel version of IDT stubs
+; - System V AMD64 ABI (arg in RDI)
+; - Provides: idt_flush, isr0..isr31, irq0..irq15
+; - Matches prior GAS behavior: builds a regs_t-style frame on the stack
+
+BITS 64
+SECTION .text
+
+global idt_flush
+global isr0
+global isr1
+global isr2
+global isr3
+global isr4
+global isr5
+global isr6
+global isr7
+global isr8
+global isr9
+global isr10
+global isr11
+global isr12
+global isr13
+global isr14
+global isr15
+global isr16
+global isr17
+global isr18
+global isr19
+global isr20
+global isr21
+global isr22
+global isr23
+global isr24
+global isr25
+global isr26
+global isr27
+global isr28
+global isr29
+global isr30
+global isr31
+
+global irq0
+global irq1
+global irq2
+global irq3
+global irq4
+global irq5
+global irq6
+global irq7
+global irq8
+global irq9
+global irq10
+global irq11
+global irq12
+global irq13
+global irq14
+global irq15
+
+; idt_flush(ptr)
+idt_flush:
+    cli
+    lidt [rdi]
+    sti
+    ret
+
+; Macro-like snippets using NASM %macro
+%macro ISR_NOERR 1
+%assign num %1
+isr%num:
+    ; push dummy error code and interrupt number
+    push qword 0
+    push qword num
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rdi, rsp
+    call isr_common_handler
+    add rsp, 136
+    iretq
+%endmacro
+
+%macro ISR_ERR 1
+%assign num %1
+isr%num:
+    ; push interrupt number only (CPU provides error code)
+    push qword num
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rdi, rsp
+    call isr_common_handler
+    add rsp, 128
+    iretq
+%endmacro
+
+%macro IRQ_STUB 1
+%assign num %1
+irq%num:
+    push qword 0
+    push qword (32 + num)
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rdi, rsp
+    call isr_common_handler
+    add rsp, 136
+    iretq
+%endmacro
+
+; Exceptions 0..31 (8,10,11,12,13,14,17 push error code)
+ISR_NOERR 0
+ISR_NOERR 1
+ISR_NOERR 2
+ISR_NOERR 3
+ISR_NOERR 4
+ISR_NOERR 5
+ISR_NOERR 6
+ISR_NOERR 7
+ISR_ERR   8
+ISR_NOERR 9
+ISR_ERR   10
+ISR_ERR   11
+ISR_ERR   12
+ISR_ERR   13
+ISR_ERR   14
+ISR_NOERR 15
+ISR_NOERR 16
+ISR_ERR   17
+ISR_NOERR 18
+ISR_NOERR 19
+ISR_NOERR 20
+ISR_NOERR 21
+ISR_NOERR 22
+ISR_NOERR 23
+ISR_NOERR 24
+ISR_NOERR 25
+ISR_NOERR 26
+ISR_NOERR 27
+ISR_NOERR 28
+ISR_NOERR 29
+ISR_NOERR 30
+ISR_NOERR 31
+
+; IRQs 0..15
+IRQ_STUB 0
+IRQ_STUB 1
+IRQ_STUB 2
+IRQ_STUB 3
+IRQ_STUB 4
+IRQ_STUB 5
+IRQ_STUB 6
+IRQ_STUB 7
+IRQ_STUB 8
+IRQ_STUB 9
+IRQ_STUB 10
+IRQ_STUB 11
+IRQ_STUB 12
+IRQ_STUB 13
+IRQ_STUB 14
+IRQ_STUB 15
+
+; end

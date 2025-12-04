@@ -41,6 +41,9 @@ LDFLAGS :=          \
 LIBS := -lgcc
 
 
+AS_SOURCES :=
+NASM_SOURCES := ${SRC_DIR}/hal_port_io.asm ${SRC_DIR}/idt_asm.asm
+
 AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
 NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}
 C_OBJECTS   := ${C_SOURCES:.c=.o}
