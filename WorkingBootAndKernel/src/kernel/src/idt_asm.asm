@@ -6,6 +6,8 @@
 BITS 64
 SECTION .text
 
+extern isr_common_handler
+
 global idt_flush
 global isr0
 global isr1
@@ -66,11 +68,10 @@ idt_flush:
 
 ; Macro-like snippets using NASM %macro
 %macro ISR_NOERR 1
-%assign num %1
-isr%num:
+isr%1:
     ; push dummy error code and interrupt number
     push qword 0
-    push qword num
+    push qword %1
     push rax
     push rbx
     push rcx
@@ -93,10 +94,9 @@ isr%num:
 %endmacro
 
 %macro ISR_ERR 1
-%assign num %1
-isr%num:
+isr%1:
     ; push interrupt number only (CPU provides error code)
-    push qword num
+    push qword %1
     push rax
     push rbx
     push rcx
@@ -119,10 +119,9 @@ isr%num:
 %endmacro
 
 %macro IRQ_STUB 1
-%assign num %1
-irq%num:
+irq%1:
     push qword 0
-    push qword (32 + num)
+    push qword (32 + %1)
     push rax
     push rbx
     push rcx

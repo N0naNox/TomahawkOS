@@ -3,6 +3,7 @@
  */
 
 #include "include/idt.h"
+#include "include/hal_port_io.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -31,20 +32,20 @@ static interrupt_handler_t interrupt_handlers[IDT_ENTRIES];
 
 extern void idt_flush(void* idt_ptr);
 
-/* ISR/IRQ stubs provided by idt.S */
-extern void isr0(); extern void isr1(); extern void isr2(); extern void isr3();
-extern void isr4(); extern void isr5(); extern void isr6(); extern void isr7();
-extern void isr8(); extern void isr9(); extern void isr10(); extern void isr11();
-extern void isr12(); extern void isr13(); extern void isr14(); extern void isr15();
-extern void isr16(); extern void isr17(); extern void isr18(); extern void isr19();
-extern void isr20(); extern void isr21(); extern void isr22(); extern void isr23();
-extern void isr24(); extern void isr25(); extern void isr26(); extern void isr27();
-extern void isr28(); extern void isr29(); extern void isr30(); extern void isr31();
+/* ISR/IRQ stubs provided by idt_asm.asm */
+extern void isr0(void); extern void isr1(void); extern void isr2(void); extern void isr3(void);
+extern void isr4(void); extern void isr5(void); extern void isr6(void); extern void isr7(void);
+extern void isr8(void); extern void isr9(void); extern void isr10(void); extern void isr11(void);
+extern void isr12(void); extern void isr13(void); extern void isr14(void); extern void isr15(void);
+extern void isr16(void); extern void isr17(void); extern void isr18(void); extern void isr19(void);
+extern void isr20(void); extern void isr21(void); extern void isr22(void); extern void isr23(void);
+extern void isr24(void); extern void isr25(void); extern void isr26(void); extern void isr27(void);
+extern void isr28(void); extern void isr29(void); extern void isr30(void); extern void isr31(void);
 
-extern void irq0(); extern void irq1(); extern void irq2(); extern void irq3();
-extern void irq4(); extern void irq5(); extern void irq6(); extern void irq7();
-extern void irq8(); extern void irq9(); extern void irq10(); extern void irq11();
-extern void irq12(); extern void irq13(); extern void irq14(); extern void irq15();
+extern void irq0(void); extern void irq1(void); extern void irq2(void); extern void irq3(void);
+extern void irq4(void); extern void irq5(void); extern void irq6(void); extern void irq7(void);
+extern void irq8(void); extern void irq9(void); extern void irq10(void); extern void irq11(void);
+extern void irq12(void); extern void irq13(void); extern void irq14(void); extern void irq15(void);
 
 /* Helper to set an IDT entry */
 static void set_idt_gate(int n, uint64_t handler, uint16_t selector, uint8_t type_attr, uint8_t ist) {
@@ -59,26 +60,16 @@ static void set_idt_gate(int n, uint64_t handler, uint16_t selector, uint8_t typ
 
 /* PIC remap to avoid conflicts with CPU exceptions */
 static void pic_remap(void) {
-    outb(0x20, 0x11);
-    outb(0xA0, 0x11);
-    outb(0x21, 0x20);
-    outb(0xA1, 0x28);
-    outb(0x21, 0x04);
-    outb(0xA1, 0x02);
-    outb(0x21, 0x01);
-    outb(0xA1, 0x01);
-    outb(0x21, 0x0);
-    outb(0xA1, 0x0);
-        hal_outb(0x20, 0x11);
-        hal_outb(0xA0, 0x11);
-        hal_outb(0x21, 0x20);
-        hal_outb(0xA1, 0x28);
-        hal_outb(0x21, 0x04);
-        hal_outb(0xA1, 0x02);
-        hal_outb(0x21, 0x01);
-        hal_outb(0xA1, 0x01);
-        hal_outb(0x21, 0x0);
-        hal_outb(0xA1, 0x0);
+    hal_outb(0x20, 0x11);
+    hal_outb(0xA0, 0x11);
+    hal_outb(0x21, 0x20);
+    hal_outb(0xA1, 0x28);
+    hal_outb(0x21, 0x04);
+    hal_outb(0xA1, 0x02);
+    hal_outb(0x21, 0x01);
+    hal_outb(0xA1, 0x01);
+    hal_outb(0x21, 0x0);
+    hal_outb(0xA1, 0x0);
 }
 
 void isr_common_handler(regs_t* r) {
