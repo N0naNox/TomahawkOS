@@ -17,6 +17,12 @@
 #define UART_PORT_COM1 0x3f8
 
 
+static char hex_digit(uint8_t nib)
+{
+    return (nib < 10) ? ('0' + nib) : ('A' + (nib - 10));
+}
+
+
 /**
  * uart_initialize
  */
@@ -82,4 +88,42 @@ void uart_puts(const char* str)
 	for(size_t i = 0; i < str_len; i++) {
 		uart_putchar(str[i]);
 	}
+}
+
+
+void uart_puthex(uint64_t val)
+{
+	uart_puts("0x");
+
+	bool started = false;
+	for (int i = 15; i >= 0; i--) {
+		uint8_t nib = (val >> (i * 4)) & 0xF;
+
+		if (nib != 0 || started || i == 0) {
+			uart_putchar(hex_digit(nib));
+			started = true;
+		}
+
+	}
+}
+
+void uart_putu(uint64_t value)
+{
+    char buffer[21];  // enough for 64-bit unsigned int (max 20 digits)
+    int pos = 0;
+
+    if (value == 0) {
+        uart_putchar('0');
+        return;
+    }
+
+    while (value > 0) {
+        buffer[pos++] = '0' + (value % 10);
+        value /= 10;
+    }
+
+    // Print digits in reverse
+    for (int i = pos - 1; i >= 0; i--) {
+        uart_putchar(buffer[i]);
+    }
 }
