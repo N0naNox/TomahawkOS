@@ -1,7 +1,7 @@
-; idt_asm.asm - NASM/Intel version of IDT stubs
+; idt_asm.asm - NASM/Intel IDT stubs (works with your idt.c / regs_t)
 ; - System V AMD64 ABI (arg in RDI)
 ; - Provides: idt_flush, isr0..isr31, irq0..irq15
-; - Matches prior GAS behavior: builds a regs_t-style frame on the stack
+; - Uses the same push order as your prior GAS stubs so isr_common_handler(regs_t*) works
 
 BITS 64
 SECTION .text
@@ -9,6 +9,7 @@ SECTION .text
 extern isr_common_handler
 
 global idt_flush
+; exception handlers
 global isr0
 global isr1
 global isr2
@@ -42,6 +43,7 @@ global isr29
 global isr30
 global isr31
 
+; IRQ handlers
 global irq0
 global irq1
 global irq2
@@ -59,19 +61,41 @@ global irq13
 global irq14
 global irq15
 
+; ---------------------------
 ; idt_flush(ptr)
+; - Loads IDT from [rdi]
+; - Masks PICs before enabling interrupts to avoid spurious IRQs
+; ---------------------------
 idt_flush:
     cli
     lidt [rdi]
+    ; mask both PICs (all IRQs masked) so enabling interrupts is safe
+    mov al, 0xFF
+    out 0x21, al     ; master PIC mask
+    out 0xA1, al     ; slave  PIC mask
     sti
     ret
 
-; Macro-like snippets using NASM %macro
+; ---------------------------
+; Helper macros to build frames
+; The push order here mirrors the GAS macros you used earlier:
+;  pushq $0          ; dummy error code
+;  pushq $num        ; interrupt number
+;  push regs: rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r15
+;  mov rdi, rsp
+;  call isr_common_handler
+;  add rsp, <cleanup>
+;  iretq
+; ---------------------------
+
 %macro ISR_NOERR 1
+global isr%1
 isr%1:
-    ; push dummy error code and interrupt number
+    ; push dummy error code then interrupt number (so C code sees them)
     push qword 0
     push qword %1
+
+    ; save general-purpose registers (order preserved)
     push rax
     push rbx
     push rcx
@@ -87,16 +111,25 @@ isr%1:
     push r13
     push r14
     push r15
+
+    ; pass pointer to regs frame in RDI and call C handler
     mov rdi, rsp
     call isr_common_handler
+
+    ; cleanup same bytes pushed: 2 (qwords) + 15 regs = (2+15)*8 = 136
     add rsp, 136
     iretq
 %endmacro
 
 %macro ISR_ERR 1
+global isr%1
 isr%1:
-    ; push interrupt number only (CPU provides error code)
-    push qword %1
+    ; For exceptions that have an error code already pushed by CPU,
+    ; we make the stack layout match ISR_NOERR (so C always sees same layout).
+    ; CPU already pushed error code on stack; we push the interrupt number
+    ; and then registers, so the final layout is identical.
+    push qword %1   ; push interrupt number
+
     push rax
     push rbx
     push rcx
@@ -112,16 +145,24 @@ isr%1:
     push r13
     push r14
     push r15
+
     mov rdi, rsp
     call isr_common_handler
-    add rsp, 128
+
+    ; cleanup: 1 (int_no) + 15 regs + (cpu-pushed error code remains below)
+    add rsp, 136    ; same cleanup bytes so stack restored consistently
     iretq
 %endmacro
 
+; IRQ stubs: same frame building, but send EOI(s) before iretq.
+; We'll send slave EOI for IRQs >=8, then master EOI always.
 %macro IRQ_STUB 1
+global irq%1
 irq%1:
+    ; push dummy error code and vector number (32 + num)
     push qword 0
     push qword (32 + %1)
+
     push rax
     push rbx
     push rcx
@@ -137,13 +178,24 @@ irq%1:
     push r13
     push r14
     push r15
+
     mov rdi, rsp
     call isr_common_handler
+
+    ; send PIC EOI(s)
+    ; if slave is involved (IRQ >= 8) send EOI to slave first
+    %if %1 >= 8
+        mov al, 0x20
+        out 0xA0, al
+    %endif
+    mov al, 0x20
+    out 0x20, al
+
     add rsp, 136
     iretq
 %endmacro
 
-; Exceptions 0..31 (8,10,11,12,13,14,17 push error code)
+; Exceptions 0..31 - mark which have error code (8,10,11,12,13,14,17)
 ISR_NOERR 0
 ISR_NOERR 1
 ISR_NOERR 2
@@ -195,4 +247,4 @@ IRQ_STUB 13
 IRQ_STUB 14
 IRQ_STUB 15
 
-; end
+; end of file

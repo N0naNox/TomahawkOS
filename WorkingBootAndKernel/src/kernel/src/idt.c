@@ -73,6 +73,10 @@ static void pic_remap(void) {
 }
 
 void isr_common_handler(regs_t* r) {
+
+    uart_puts("INTERRUPT FIRED!\n");
+
+
     if (r->int_no < IDT_ENTRIES && interrupt_handlers[r->int_no]) {
         interrupt_handlers[r->int_no](r);
     } else {
