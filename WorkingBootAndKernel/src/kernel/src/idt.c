@@ -6,6 +6,7 @@
 #include "include/hal_port_io.h"
 #include <string.h>
 #include <stdint.h>
+#include <uart.h>
 
 #define IDT_ENTRIES 256
 

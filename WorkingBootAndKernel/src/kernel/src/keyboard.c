@@ -1,0 +1,74 @@
+/* keyboard.c - Minimal PS/2 keyboard driver using scancode set 1
+ * - Registers IRQ1 handler (vector 33 after PIC remap)
+ * - Reads scancode from port 0x60 using HAL
+ * - Maps common scancodes to ASCII (lowercase)
+ * - Echoes characters to VGA and serial
+ */
+
+#include "include/keyboard.h"
+#include "include/hal_port_io.h"
+#include "include/idt.h"
+#include "include/vga.h"
+#include <uart.h>
+
+/* Simple ring buffer */
+static volatile char kb_buf[128];
+static volatile int kb_head = 0;
+static volatile int kb_tail = 0;
+
+/* Basic scancode set 1 to ASCII map (0..0x7F). 0 means unmapped */
+static const char scancode_map[128] = {
+    /* 0x00 - 0x0F */
+    0,  0, '1','2','3','4','5','6','7','8','9','0','-','=', 0,  0,
+    /* 0x10 - 0x1F */
+    'q','w','e','r','t','y','u','i','o','p','[',']', '\n', 0, 'a','s',
+    /* 0x20 - 0x2F */
+    'd','f','g','h','j','k','l', ';','\'', '`', 0, '\\','z','x','c','v',
+    /* 0x30 - 0x3F */
+    'b','n','m',',','.','/', 0,  '*', 0, ' ', 0, 0, 0, 0, 0, 0,
+    /* rest default 0 */
+};
+
+/* IRQ handler called from C via isr_common_handler */
+static void keyboard_irq_handler(regs_t* r) {
+    (void)r;
+    /* Read scancode */
+    uint8_t sc = hal_inb(0x60);
+
+    /* Ignore break codes (high bit set) */
+    if (sc & 0x80) {
+        /* send EOI for master PIC */
+        hal_outb(0x20, 0x20);
+        return;
+    }
+
+    char c = 0;
+    if (sc < sizeof(scancode_map)) c = scancode_map[sc];
+
+    if (c) {
+        /* echo to VGA and serial */
+        vga_putc(c);
+        uart_putchar(c);
+        /* push into buffer (non-blocking, drop on full) */
+        int next = (kb_head + 1) & (sizeof(kb_buf)-1);
+        if (next != kb_tail) {
+            kb_buf[kb_head] = c;
+            kb_head = next;
+        }
+    }
+
+    /* Send End Of Interrupt (EOI) to PIC (master only for IRQ1) */
+    hal_outb(0x20, 0x20);
+}
+
+void keyboard_init(void) {
+    /* Register handler at vector 33 (IRQ1 -> 32+1) */
+    register_interrupt_handler(32 + 1, keyboard_irq_handler);
+}
+
+char keyboard_getchar(void) {
+    if (kb_tail == kb_head) return 0;
+    char c = kb_buf[kb_tail];
+    kb_tail = (kb_tail + 1) & (sizeof(kb_buf)-1);
+    return c;
+}

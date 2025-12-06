@@ -49,13 +49,19 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 {
 	/** Main bootloader application status. */
 	EFI_STATUS status;
+	
+	/* Try to get Graphics Output Protocol for framebuffer info */
+	EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
+	EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* mode_info = NULL;
 	/**
 	 * The root file system entity.
 	 * This is the file root from which the kernel binary will be loaded.
 	 */
 	EFI_FILE* root_file_system;
 	/** The kernel entry point address. */
-	EFI_PHYSICAL_ADDRESS* kernel_entry_point = 0;
+	/* Use a static variable so it persists after ExitBootServices */
+	static EFI_PHYSICAL_ADDRESS kernel_entry_point_value = 0;
+	EFI_PHYSICAL_ADDRESS* kernel_entry_point = &kernel_entry_point_value;
 	/** The EFI memory map descriptor. */
 	EFI_MEMORY_DESCRIPTOR* memory_map = NULL;
 	/** The memory map key. */
@@ -85,6 +91,32 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 	status = uefi_call_wrapper(gBS->SetWatchdogTimer, 4, 0, 0, 0, NULL);
 	if(check_for_fatal_error(status, L"Error setting watchdog timer")) {
 		return status;
+	}
+
+	// Try to get Graphics Output Protocol for framebuffer
+	#ifdef DEBUG
+		debug_print_line(L"Debug: Attempting to locate Graphics Output Protocol\n");
+	#endif
+	
+	status = uefi_call_wrapper(gBS->LocateProtocol, 3,
+		&gEfiGraphicsOutputProtocolGuid, NULL, (VOID**)&gop);
+	if (!EFI_ERROR(status) && gop != NULL) {
+		#ifdef DEBUG
+			debug_print_line(L"Debug: GOP located, current mode: %u\n", gop->Mode->Mode);
+		#endif
+		
+		mode_info = gop->Mode->Info;
+		#ifdef DEBUG
+			debug_print_line(L"Debug: Framebuffer at 0x%llx, %ux%u\n",
+				gop->Mode->FrameBufferBase,
+				mode_info->HorizontalResolution,
+				mode_info->VerticalResolution);
+		#endif
+	} else {
+		#ifdef DEBUG
+			debug_print_line(L"Debug: GOP not found, no graphics available\n");
+		#endif
+		gop = NULL;
 	}
 
 	// Reset console input.
@@ -144,12 +176,27 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 			*kernel_entry_point);
 	#endif
 
-	// We are not using graphics for the minimal bootloader. Provide empty
-	// video info so the kernel will not attempt to access a framebuffer.
-	boot_info.video_mode_info.framebuffer_pointer = (VOID*)0;
-	boot_info.video_mode_info.horizontal_resolution = 0;
-	boot_info.video_mode_info.vertical_resolution = 0;
-	boot_info.video_mode_info.pixels_per_scaline = 0;
+	// Set video mode info from GOP if available
+	if (gop != NULL && mode_info != NULL) {
+		boot_info.video_mode_info.framebuffer_pointer = (VOID*)gop->Mode->FrameBufferBase;
+		boot_info.video_mode_info.horizontal_resolution = mode_info->HorizontalResolution;
+		boot_info.video_mode_info.vertical_resolution = mode_info->VerticalResolution;
+		boot_info.video_mode_info.pixels_per_scaline = mode_info->PixelsPerScanLine;
+		
+		#ifdef DEBUG
+			debug_print_line(L"Debug: Video info passed to kernel\n");
+		#endif
+	} else {
+		// No graphics available, provide zeros
+		boot_info.video_mode_info.framebuffer_pointer = (VOID*)0;
+		boot_info.video_mode_info.horizontal_resolution = 0;
+		boot_info.video_mode_info.vertical_resolution = 0;
+		boot_info.video_mode_info.pixels_per_scaline = 0;
+		
+		#ifdef DEBUG
+			debug_print_line(L"Debug: No graphics available\n");
+		#endif
+	}
 
 	#ifdef DEBUG
 		debug_print_line(L"Debug: Closing Graphics Output Service handles\n");
@@ -168,20 +215,36 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 		return status;
 	}
 
+	#ifdef DEBUG
+		debug_print_line(L"Debug: About to print memory map\n");
+	#endif
+
 	debug_print_memory_map(memory_map, memory_map_size, descriptor_size);
 
-	// Get the memory map prior to exiting the boot service.
-	status = get_memory_map((VOID**)&memory_map, &memory_map_size,
-		&memory_map_key, &descriptor_size, &descriptor_version);
-	if(EFI_ERROR(status)) {
-		// Error has already been printed.
-		return status;
-	}
+	#ifdef DEBUG
+		debug_print_line(L"Debug: Finished printing memory map, calling ExitBootServices\n");
+	#endif
+
+	// ExitBootServices requires the memory_map_key from the most recent GetMemoryMap call
+	// The memory_map and its key are valid and can be used now
+
+	#ifdef DEBUG
+		debug_print_line(L"Debug: Calling ExitBootServices with key 0x%llx\n", memory_map_key);
+		debug_print_line(L"Debug: Kernel entry address (raw): 0x%llx\n", *kernel_entry_point);
+		debug_print_line(L"Debug: Boot info address: 0x%llx\n", &boot_info);
+	#endif
 
 	status = uefi_call_wrapper(gBS->ExitBootServices, 2,
 		ImageHandle, memory_map_key);
-	if(check_for_fatal_error(status, L"Error exiting boot services")) {
-		return status;
+	
+	// NOTE: Cannot print debug output after ExitBootServices - boot services are gone!
+	// The next lines will jump directly to the kernel without any debug output
+	
+	if(EFI_ERROR(status)) {
+		// If ExitBootServices failed, we're in an undefined state
+		// We can't print errors or return, just halt
+		__asm__ volatile("cli; hlt");
+		return status;  // Never reached
 	}
 
 	// Set kernel boot info.
