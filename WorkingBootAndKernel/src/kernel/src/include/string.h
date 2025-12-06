@@ -19,11 +19,24 @@
  */
 size_t strlen(const char* str);
 
-
+/**
+ * @brief Copy memory.
+ * Copies n bytes from src to dst.
+ * @param dst[out]  Destination buffer.
+ * @param src[in]   Source buffer.
+ * @param n[in]     Number of bytes to copy.
+ * @return          Pointer to dst.
+ */
 void* memcpy(void* dst, const void* src, size_t n);
+
+/**
+ * @brief Set memory.
+ * Sets n bytes at dst to value c.
+ * @param dst[out]  Destination buffer.
+ * @param c[in]     Value to set (as int).
+ * @param n[in]     Number of bytes to set.
+ * @return          Pointer to dst.
+ */
 void* memset(void* dst, int c, size_t n);
-
-
-
 
 #endif

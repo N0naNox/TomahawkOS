@@ -42,10 +42,13 @@ LIBS := -lgcc
 
 
 AS_SOURCES :=
+NASM_SOURCES := ${SRC_DIR}/hal_port_io_asm.asm ${SRC_DIR}/idt_asm.asm
 
 C_SOURCES  :=              \
+	${SRC_DIR}/idt.c         \
+	${SRC_DIR}/hal_port_io.c \
 	${SRC_DIR}/kernel.c      \
-	${SRC_DIR}/port_io.c     \
+	${SRC_DIR}/vga.c         \
 	${SRC_DIR}/string.c      \
 	${SRC_DIR}/uart.c        \
 	${SRC_DIR}/paging.c      \
@@ -55,8 +58,12 @@ C_SOURCES  :=              \
 	${SRC_DIR}/page_fault_handler_mm.c \
 	${SRC_DIR}/elf_loader_mm.c     \
 
-OBJECTS    := ${AS_SOURCES:.S=.o}
-OBJECTS    += ${C_SOURCES:.c=.o}
+AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
+NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}
+C_OBJECTS   := ${C_SOURCES:.c=.o}
+
+OBJECTS := ${AS_OBJECTS} ${NASM_OBJECTS} ${C_OBJECTS}
+
 
 BUILD_DIR  := build
 BINARY     := ${BUILD_DIR}/kernel.elf
@@ -69,11 +76,15 @@ all: ${BINARY}
 ${BINARY}: ${BUILD_DIR} ${OBJECTS}
 	${CC} -T ${SRC_DIR}/kernel.ld -g3 -o ${BINARY} ${LDFLAGS} ${OBJECTS} ${LIBS}
 
-%.o: %.S
+%.as.o: %.S
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}
+
 
 %.o: %.c
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}
+
+%.o: %.asm
+	nasm -f elf64 $< -o $@
 
 ${BUILD_DIR}:
 	mkdir -p ${BUILD_DIR}
@@ -81,3 +92,4 @@ ${BUILD_DIR}:
 clean:
 	rm -f ${OBJECTS}
 	rm -f ${BINARY}
+	rm -rf ${BUILD_DIR}

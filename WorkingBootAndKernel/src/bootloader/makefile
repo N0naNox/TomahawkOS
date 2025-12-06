@@ -4,7 +4,8 @@ MAKEFLAGS += --warn-undefined-variables
 MAKEFLAGS += --no-builtin-rules
 
 ARCH := x86_64
-CC   := ${ARCH}-unknown-elf-gcc
+# Use the system cross/gcc toolchain if present. Prefer x86_64-linux-gnu-gcc.
+CC   := x86_64-linux-gnu-gcc
 
 BUILD_DIR  := build
 SRC_DIR    := src
