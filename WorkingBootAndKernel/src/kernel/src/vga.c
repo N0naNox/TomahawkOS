@@ -1,20 +1,31 @@
 /*
- * vga.c - Minimal VGA text-mode driver
- * - Writes characters to 0xB8000 in text mode
+ * vga.c - Minimal VGA driver using framebuffer
+ * - Writes characters to GOP framebuffer
  * - Simple cursor, newline handling, and color support
  */
 
 #include "include/vga.h"
+#include "include/font_8x16.h"
 #include <stdint.h>
 #include <stddef.h>
 
-/* VGA text buffer is at physical 0xB8000 */
-static volatile uint16_t* const VGA_BUFFER = (uint16_t*)0xB8000;
+/* Framebuffer info (set by vga_init_fb) */
+static volatile uint32_t* fb_buffer = 0;
+static uint32_t fb_width = 1024;
+static uint32_t fb_height = 768;
+static uint32_t fb_pitch = 1024;
 
 static int vga_row = 0;
 static int vga_col = 0;
 static uint8_t vga_bg = VGA_COLOR_BLACK;
 static uint8_t vga_fg = VGA_COLOR_LIGHT_GREY;
+
+void vga_init_fb(void* framebuffer, uint32_t width, uint32_t height, uint32_t pitch) {
+	fb_buffer = (volatile uint32_t*)framebuffer;
+	fb_width = width;
+	fb_height = height;
+	fb_pitch = pitch;
+}
 
 static inline uint16_t vga_entry(char c, uint8_t bg, uint8_t fg) {
 	uint16_t color = ((bg & 0x0F) << 4) | (fg & 0x0F);
@@ -27,9 +38,11 @@ void vga_set_color(uint8_t bg, uint8_t fg) {
 }
 
 void vga_clear(uint8_t bg, uint8_t fg) {
-	uint16_t entry = vga_entry(' ', bg, fg);
-	for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i) {
-		VGA_BUFFER[i] = entry;
+	(void)bg; (void)fg;
+	if (!fb_buffer) return;
+	/* Clear framebuffer to black */
+	for (uint32_t i = 0; i < fb_height * fb_pitch; i++) {
+		fb_buffer[i] = 0x00000000;
 	}
 	vga_row = 0;
 	vga_col = 0;
@@ -56,20 +69,25 @@ void vga_get_cursor(int* row, int* col) {
 
 /* Scroll the screen up by one line */
 static void vga_scroll(void) {
-	for (int r = 1; r < VGA_HEIGHT; ++r) {
-		for (int c = 0; c < VGA_WIDTH; ++c) {
-			VGA_BUFFER[(r - 1) * VGA_WIDTH + c] = VGA_BUFFER[r * VGA_WIDTH + c];
+	if (!fb_buffer) return;
+	/* Scroll framebuffer up by 16 pixels (one char height) */
+	for (uint32_t y = 16; y < fb_height; y++) {
+		for (uint32_t x = 0; x < fb_width; x++) {
+			fb_buffer[(y - 16) * fb_pitch + x] = fb_buffer[y * fb_pitch + x];
 		}
 	}
-	/* clear last line */
-	uint16_t blank = vga_entry(' ', vga_bg, vga_fg);
-	for (int c = 0; c < VGA_WIDTH; ++c) {
-		VGA_BUFFER[(VGA_HEIGHT - 1) * VGA_WIDTH + c] = blank;
+	/* Clear last 16 rows */
+	for (uint32_t y = fb_height - 16; y < fb_height; y++) {
+		for (uint32_t x = 0; x < fb_width; x++) {
+			fb_buffer[y * fb_pitch + x] = 0x00000000;
+		}
 	}
 	if (vga_row > 0) vga_row--;
 }
 
 void vga_putc(char c) {
+	if (!fb_buffer) return;
+	
 	if (c == '\n') {
 		vga_col = 0;
 		++vga_row;
@@ -82,7 +100,10 @@ void vga_putc(char c) {
 			++vga_row;
 		}
 	} else {
-		VGA_BUFFER[vga_row * VGA_WIDTH + vga_col] = vga_entry(c, vga_bg, vga_fg);
+		/* Draw character using font */
+		uint32_t x = vga_col * 9;  /* 8 pixels + 1 spacing */
+		uint32_t y = vga_row * 16; /* 16 pixels tall */
+		draw_char_8x16(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
 		++vga_col;
 		if (vga_col >= VGA_WIDTH) {
 			vga_col = 0;

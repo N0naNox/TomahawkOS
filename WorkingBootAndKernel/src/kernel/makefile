@@ -43,11 +43,15 @@ LIBS := -lgcc
 
 AS_SOURCES :=
 NASM_SOURCES := ${SRC_DIR}/entry.asm \
-	${SRC_DIR}/hal_port_io_asm.asm
+	${SRC_DIR}/hal_port_io_asm.asm \
+	${SRC_DIR}/idt_asm.asm
 
 C_SOURCES  :=              \
 	${SRC_DIR}/hal_port_io.c \
+	${SRC_DIR}/idt.c         \
+	${SRC_DIR}/keyboard.c    \
 	${SRC_DIR}/kernel.c      \
+	${SRC_DIR}/uart.c        \
 	${SRC_DIR}/vga.c         \
 	${SRC_DIR}/string.c
 

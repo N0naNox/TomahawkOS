@@ -10,6 +10,8 @@
 #include <stddef.h>
 #include "include/vga.h"
 #include "include/font_8x16.h"
+#include "include/idt.h"
+#include "include/keyboard.h"
 #include <boot.h>
 
 /**
@@ -84,6 +86,24 @@ void kernel_main(Boot_Info* boot_info)
 	for (int i = 0; done[i]; i++) {
 		outb(0x3F8, done[i]);
 	}
+
+	/* Initialize VGA with framebuffer */
+	vga_init_fb((void*)fb, width, height, pitch);
+	vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+	
+	/* Initialize IDT and keyboard */
+	idt_install();
+	keyboard_init();
+	
+	/* Enable interrupts */
+	__asm__ volatile("sti");
+	
+	const char* ready = "Keyboard ready - type something!\n";
+	for (int i = 0; ready[i]; i++) {
+		outb(0x3F8, ready[i]);
+	}
+	
+	vga_write("Type on keyboard: ");
 
 	/* Infinite loop */
 	while (1) {

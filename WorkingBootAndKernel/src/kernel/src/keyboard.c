@@ -32,13 +32,12 @@ static const char scancode_map[128] = {
 /* IRQ handler called from C via isr_common_handler */
 static void keyboard_irq_handler(regs_t* r) {
     (void)r;
+    uart_putchar('H');
     /* Read scancode */
     uint8_t sc = hal_inb(0x60);
 
     /* Ignore break codes (high bit set) */
     if (sc & 0x80) {
-        /* send EOI for master PIC */
-        hal_outb(0x20, 0x20);
         return;
     }
 
@@ -56,9 +55,7 @@ static void keyboard_irq_handler(regs_t* r) {
             kb_head = next;
         }
     }
-
-    /* Send End Of Interrupt (EOI) to PIC (master only for IRQ1) */
-    hal_outb(0x20, 0x20);
+    /* Note: EOI is sent by the IRQ stub in idt_asm.asm */
 }
 
 void keyboard_init(void) {
