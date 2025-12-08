@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "include/vga.h"
+#include "include/font_8x16.h"
 #include <boot.h>
 
 /**
@@ -28,53 +29,17 @@ static inline uint8_t inb(uint16_t port) {
 	return value;
 }
 
-/* Simple 5x7 bitmap font for basic characters */
-static const uint8_t font_5x7[][7] = {
-	/* 'K' */ {0x44, 0x4A, 0x52, 0x62, 0x52, 0x4A, 0x44},
-	/* 'E' */ {0x7E, 0x82, 0x80, 0x7E, 0x80, 0x82, 0x7E},
-	/* 'R' */ {0x7E, 0x82, 0x82, 0x7E, 0x88, 0x84, 0x82},
-	/* 'N' */ {0x82, 0x86, 0x8A, 0x92, 0xA2, 0xC2, 0x82},
-	/* 'L' */ {0x80, 0x80, 0x80, 0x80, 0x80, 0x82, 0x7E},
-	/* 'U' */ {0x82, 0x82, 0x82, 0x82, 0x82, 0x82, 0x7C},
-	/* 'G' */ {0x7E, 0x82, 0x80, 0x9E, 0x82, 0x82, 0x7E},
-	/* ' ' */ {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-	/* 'R' */ {0x7E, 0x82, 0x82, 0x7E, 0x88, 0x84, 0x82},
-	/* 'I' */ {0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x7E},
-};
-
 /**
- * @brief Draw a character from the font
+ * @brief Write text to the framebuffer
  */
-void draw_char(volatile uint32_t* fb, uint32_t pitch, char c, uint32_t x, uint32_t y) {
-	int idx = -1;
-	switch (c) {
-		case 'K': idx = 0; break;
-		case 'E': idx = 1; break;
-		case 'R': idx = 2; break;
-		case 'N': idx = 3; break;
-		case 'L': idx = 4; break;
-		case 'U': idx = 5; break;
-		case 'G': idx = 6; break;
-		case ' ': idx = 7; break;
-		case 'I': idx = 9; break;
-		default: return;
-	}
-	
-	const uint8_t* bitmap = font_5x7[idx];
-	
-	/* Draw each row of the character (7 rows) */
-	for (int row = 0; row < 7; row++) {
-		uint8_t bits = bitmap[row];
-		/* Draw each column (8 pixels wide, bit 7 to 0) */
-		for (int col = 0; col < 8; col++) {
-			if (bits & (0x80 >> col)) {
-				uint32_t px = x + col;
-				uint32_t py = y + row;
-				fb[py * pitch + px] = 0xFFFFFFFF;  /* White */
-			}
-		}
+void write_text(volatile uint32_t* fb, uint32_t pitch, uint32_t width, uint32_t height,
+                const char* text, uint32_t x, uint32_t y)
+{
+	for (int i = 0; text[i]; i++) {
+		draw_char_8x16(fb, pitch, text[i], x + (i * 9), y, width, height);
 	}
 }
+
 
 void kernel_main(Boot_Info* boot_info)
 {
@@ -108,15 +73,12 @@ void kernel_main(Boot_Info* boot_info)
 		}
 	}
 	
-	/* Draw "KERNEL RUNNING" with bitmap font */
+	/* Draw "KERNEL RUNNING" with 8x16 bitmap font */
 	const char* text = "KERNEL RUNNING";
 	uint32_t start_x = 100;
 	uint32_t start_y = 100;
-	uint32_t char_width = 10;  /* 8 pixels + 2 spacing */
 	
-	for (int i = 0; text[i]; i++) {
-		draw_char(fb, pitch, text[i], start_x + (i * char_width), start_y);
-	}
+	write_text(fb, pitch, width, height, text, start_x, start_y);
 	
 	const char* done = "Framebuffer written\n";
 	for (int i = 0; done[i]; i++) {
