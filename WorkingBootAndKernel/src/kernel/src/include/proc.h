@@ -65,5 +65,13 @@ pcb_t* create_process(const char* name, void (*entry)(void));
 tcb_t* create_thread(pcb_t* proc, void (*entry)(void));
 
 
+void enqueue_ready(tcb_t* t);
+tcb_t* dequeue_ready(void);
+void switch_context(cpu_context_t* old_ctx, cpu_context_t* new_ctx);
+void* alloc_kernel_stack(void);
+tcb_t* pick_next(void);
+void thread_yield(void);
+
+
 void schedule(void);
 #endif

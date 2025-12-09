@@ -57,6 +57,7 @@ C_SOURCES  :=              \
 	${SRC_DIR}/mm.c        \
 	${SRC_DIR}/page_fault_handler_mm.c \
 	${SRC_DIR}/elf_loader_mm.c     \
+	${SRC_DIR}/timer.c
 
 AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
 NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}
