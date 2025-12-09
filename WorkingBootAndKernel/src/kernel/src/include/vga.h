@@ -37,6 +37,9 @@ enum vga_color {
 /* Initialize VGA driver (clears screen) */
 void vga_init(void);
 
+/* Initialize VGA with framebuffer info */
+void vga_init_fb(void* framebuffer, uint32_t width, uint32_t height, uint32_t pitch);
+
 /* Clear screen with color */
 void vga_clear(uint8_t bg, uint8_t fg);
 

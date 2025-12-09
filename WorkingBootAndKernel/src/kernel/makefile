@@ -42,21 +42,18 @@ LIBS := -lgcc
 
 
 AS_SOURCES :=
-NASM_SOURCES := ${SRC_DIR}/hal_port_io_asm.asm ${SRC_DIR}/idt_asm.asm
+NASM_SOURCES := ${SRC_DIR}/entry.asm \
+	${SRC_DIR}/hal_port_io_asm.asm \
+	${SRC_DIR}/idt_asm.asm
 
 C_SOURCES  :=              \
-	${SRC_DIR}/idt.c         \
 	${SRC_DIR}/hal_port_io.c \
+	${SRC_DIR}/idt.c         \
+	${SRC_DIR}/keyboard.c    \
 	${SRC_DIR}/kernel.c      \
-	${SRC_DIR}/vga.c         \
-	${SRC_DIR}/string.c      \
 	${SRC_DIR}/uart.c        \
-	${SRC_DIR}/paging.c      \
-	${SRC_DIR}/page_fault_handler.c \
-	${SRC_DIR}/elf_loader.c \
-	${SRC_DIR}/mm.c        \
-	${SRC_DIR}/page_fault_handler_mm.c \
-	${SRC_DIR}/elf_loader_mm.c     \
+	${SRC_DIR}/vga.c         \
+	${SRC_DIR}/string.c
 
 AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
 NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}
