@@ -60,6 +60,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/elf_loader_mm.c     \
 	${SRC_DIR}/timer.c   \
 	${SRC_DIR}/proc.c   \
+	${SRC_DIR}/string.c   \
+	${SRC_DIR}/vga.c	\
 
 AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
 NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}

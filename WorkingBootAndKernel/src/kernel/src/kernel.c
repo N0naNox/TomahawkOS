@@ -105,6 +105,9 @@ void kernel_main(Boot_Info* boot_info)
 	
 	/* Initialize IDT and keyboard */
 	idt_install();
+
+	timer_install(); //For now there is no handler so it just prints the interrupt
+
 	keyboard_init();
 	
 	/* Enable interrupts */
