@@ -8,13 +8,11 @@
 #include <stdint.h>
 
 /* Register/state snapshot passed to C interrupt handlers.
- * Layout matches the stack frame constructed by the assembly stubs in idt.S
+ * Layout matches the stack frame constructed by assembly stubs.
+ * Stack grows DOWN, so first push is at highest address.
  */
 typedef struct regs {
-    uint64_t int_no;
-    uint64_t err_code;
-
-    /* General purpose registers saved by stubs (order preserved) */
+    /* Pushed by our assembly (in reverse order from pushes) */
     uint64_t rax;
     uint64_t rbx;
     uint64_t rcx;
@@ -31,7 +29,10 @@ typedef struct regs {
     uint64_t r14;
     uint64_t r15;
 
-    /* Values pushed by CPU on interrupt entry */
+    uint64_t int_no;
+    uint64_t err_code;
+
+    /* Pushed by CPU on interrupt entry */
     uint64_t rip;
     uint64_t cs;
     uint64_t rflags;

@@ -11,6 +11,7 @@
 #include "include/idt.h"
 #include <boot.h>
 #include <uart.h>
+#include "timer.h"
 
 /** Whether to draw a test pattern to video output. */
 #define DRAW_TEST_SCREEN 1
@@ -47,6 +48,7 @@ void kernel_main(Boot_Info* boot_info)
 
 	/* Install IDT (interrupts) */
 	idt_install();
+	
 	vga_write("Kernel: IDT installed.\n");
 	uart_puts("Kernel: IDT installed.\n");
 

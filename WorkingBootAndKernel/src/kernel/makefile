@@ -41,7 +41,7 @@ LDFLAGS :=          \
 LIBS := -lgcc
 
 
-AS_SOURCES := ${SRC_DIR}/switch.S
+AS_SOURCES := 
 NASM_SOURCES := ${SRC_DIR}/hal_port_io_asm.asm ${SRC_DIR}/idt_asm.asm
 
 C_SOURCES  :=              \
