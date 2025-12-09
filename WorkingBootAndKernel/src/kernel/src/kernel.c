@@ -13,6 +13,18 @@
 #include "include/idt.h"
 #include "include/keyboard.h"
 #include <boot.h>
+#include <uart.h>
+#include "timer.h"
+
+/** Whether to draw a test pattern to video output. */
+#define DRAW_TEST_SCREEN 1
+
+#define TEST_SCREEN_COL_NUM             4
+#define TEST_SCREEN_ROW_NUM             3
+#define TEST_SCREEN_TOTAL_TILES         TEST_SCREEN_COL_NUM * TEST_SCREEN_ROW_NUM
+#define TEST_SCREEN_PRIMARY_COLOUR      0x00FF40FF
+#define TEST_SCREEN_SECONDARY_COLOUR    0x00FF00CF
+
 
 /**
  * @brief The kernel main program.
