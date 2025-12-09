@@ -1,52 +1,48 @@
-    /* switch.S - save/restore CPU context
-     *
-     * C signature:
-     *   void switch_context(cpu_context_t *old, cpu_context_t *new);
-     *
-     * cpu_context_t layout (in proc.h):
-     *   uint64_t rip;   // offset 0
-     *   uint64_t rsp;   // offset 8
-     *   uint64_t rbp;   // offset 16
-     *   uint64_t rbx;   // offset 24
-     *   uint64_t r12;   // offset 32
-     *   uint64_t r13;   // offset 40
-     *   uint64_t r14;   // offset 48
-     *   uint64_t r15;   // offset 56
-     *
-     * We save callee-saved regs + rip/rsp.
-     */
-
     .text
     .globl switch_context
     .type switch_context, @function
-
+/* switch_context(cpu_context_t* old, cpu_context_t* new)
+ *
+ * Layout of cpu_context_t (must match proc.h):
+ * 0: rip (8)
+ * 8: rsp (8)
+ * 16: rbp (8)
+ * 24: rbx (8)
+ * 32: r12 (8)
+ * 40: r13 (8)
+ * 48: r14 (8)
+ * 56: r15 (8)
+ */
 switch_context:
     /* rdi = old, rsi = new */
 
-    /* Save callee-saved registers into *old */
-    movq %r15, 56(%rdi)
-    movq %r14, 48(%rdi)
-    movq %r13, 40(%rdi)
-    movq %r12, 32(%rdi)
-    movq %rbx, 24(%rdi)
-    movq %rbp, 16(%rdi)
+    /* --- save callee-saved registers into *old --- */
+    movq %rbx, 24(%rdi)        /* store rbx */
+    movq %rbp, 16(%rdi)        /* store rbp */
+    movq %r12, 32(%rdi)        /* store r12 */
+    movq %r13, 40(%rdi)        /* store r13 */
+    movq %r14, 48(%rdi)        /* store r14 */
+    movq %r15, 56(%rdi)        /* store r15 */
 
-    /* Save current RSP and return address (RIP) */
-    movq %rsp, 8(%rdi)        /* old->rsp = rsp */
-    movq (%rsp), %rax         /* saved return address is on stack top */
-    movq %rax, 0(%rdi)        /* old->rip = saved return address */
+    /* save rsp */
+    movq %rsp, 8(%rdi)
 
-    /* Load callee-saved registers from *new */
-    movq 56(%rsi), %r15
-    movq 48(%rsi), %r14
-    movq 40(%rsi), %r13
-    movq 32(%rsi), %r12
+    /* save rip: return address is at (%rsp) */
+    movq (%rsp), %rax
+    movq %rax, 0(%rdi)
+
+    /* --- load callee-saved registers from *new --- */
     movq 24(%rsi), %rbx
     movq 16(%rsi), %rbp
+    movq 32(%rsi), %r12
+    movq 40(%rsi), %r13
+    movq 48(%rsi), %r14
+    movq 56(%rsi), %r15
 
-    /* Load new rsp and jump to new->rip */
-    movq 8(%rsi), %rsp        /* set stack */
-    movq 0(%rsi), %rax        /* new->rip into rax */
-    jmp *%rax                 /* jump to new RIP (does not return) */
+    /* restore rsp from new */
+    movq 8(%rsi), %rsp
 
-    .size switch_context, .-switch_context
+    /* push new RIP and return */
+    movq 0(%rsi), %rax
+    pushq %rax
+    ret

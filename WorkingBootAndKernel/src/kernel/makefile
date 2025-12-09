@@ -41,7 +41,7 @@ LDFLAGS :=          \
 LIBS := -lgcc
 
 
-AS_SOURCES :=
+AS_SOURCES := ${SRC_DIR}/switch.S
 NASM_SOURCES := ${SRC_DIR}/hal_port_io_asm.asm ${SRC_DIR}/idt_asm.asm
 
 C_SOURCES  :=              \
@@ -57,7 +57,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/mm.c        \
 	${SRC_DIR}/page_fault_handler_mm.c \
 	${SRC_DIR}/elf_loader_mm.c     \
-	${SRC_DIR}/timer.c
+	${SRC_DIR}/timer.c   \
+	${SRC_DIR}/proc.c   \
 
 AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
 NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}
