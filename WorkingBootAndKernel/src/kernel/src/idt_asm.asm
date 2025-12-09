@@ -20,13 +20,12 @@ global irq8, irq9, irq10, irq11, irq12, irq13, irq14, irq15
 
 ; ---------------------------
 ; idt_flush(ptr)
+; - Loads IDT from [rdi]
+; - Enables interrupts (PIC masking is done in C via pic_remap)
 ; ---------------------------
 idt_flush:
     cli
     lidt [rdi]
-    mov al, 0xFF
-    out 0x21, al
-    out 0xA1, al
     sti
     ret
 
@@ -68,26 +67,25 @@ isr%1:
     mov rdi, rsp
     call isr_common_handler
 
-    ; restore registers (15 regs)
-    pop rax
-    pop rbx
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    pop rbp
-    pop r8
-    pop r9
-    pop r10
-    pop r11
-    pop r12
-    pop r13
-    pop r14
+    ; restore registers (reverse order)
     pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
 
-    ; pop int_no and dummy error code
+    ; skip int_no and err_code
     add rsp, 16
-
     iretq
 %endmacro
 
@@ -129,26 +127,25 @@ isr%1:
     mov rdi, rsp
     call isr_common_handler
 
-    ; restore registers (15 regs)
-    pop rax
-    pop rbx
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    pop rbp
-    pop r8
-    pop r9
-    pop r10
-    pop r11
-    pop r12
-    pop r13
-    pop r14
+    ; restore registers
     pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
 
-    ; pop int_no and CPU's error code
+    ; skip int_no and cpu-pushed err_code
     add rsp, 16
-
     iretq
 %endmacro
 
@@ -177,9 +174,14 @@ irq%1:
     push rax
 
     mov rdi, rsp
+    ; debug: signal IRQ fired on COM1 (safe: rax saved on stack)
+    %if %1 = 1
+        mov al, 'K'
+        out 0x3F8, al
+    %endif
     call isr_common_handler
 
-    ; send PIC EOI
+    ; send PIC EOI(s) while registers are still saved
     %if %1 >= 8
         mov al, 0x20
         out 0xA0, al
@@ -187,23 +189,26 @@ irq%1:
     mov al, 0x20
     out 0x20, al
 
-    pop rax
-    pop rbx
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    pop rbp
-    pop r8
-    pop r9
-    pop r10
-    pop r11
-    pop r12
-    pop r13
-    pop r14
+    ; restore registers
     pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
 
+    ; remove int_no and err_code
     add rsp, 16
+
     iretq
 %endmacro
 
