@@ -2,6 +2,7 @@
 #include "string.h"
 #include "mm.h"
 #include <stdint.h>
+#include "include/scheduler.h"
 
 /* Kernel stack size per thread */
 #define KERNEL_STACK_SIZE (16 * 1024)
@@ -62,6 +63,9 @@ tcb_t* create_thread(pcb_t* proc, void (*entry)(void)) {
         t->next = proc->threads;
         proc->threads = t;
     }
+
+    /* Add to scheduler ready queue */
+    scheduler_add_thread(t);
 
     return t;
 }

@@ -41,7 +41,8 @@ LDFLAGS :=          \
 LIBS := -lgcc
 
 
-AS_SOURCES :=
+AS_SOURCES := ${SRC_DIR}/switch.S
+
 NASM_SOURCES := ${SRC_DIR}/entry.asm \
 	${SRC_DIR}/hal_port_io_asm.asm \
 	${SRC_DIR}/idt_asm.asm
@@ -60,6 +61,7 @@ C_SOURCES  :=              \
 	${SRC_DIR}/elf_loader_mm.c     \
 	${SRC_DIR}/timer.c   \
 	${SRC_DIR}/proc.c   \
+	${SRC_DIR}/scheduler.c   \
 	${SRC_DIR}/string.c   \
 	${SRC_DIR}/vga.c	\
 
