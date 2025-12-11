@@ -15,6 +15,8 @@
 #include <boot.h>
 #include <uart.h>
 #include "timer.h"
+#include "include/scheduler.h"
+#include "include/proc.h"
 
 /** Whether to draw a test pattern to video output. */
 #define DRAW_TEST_SCREEN 1
@@ -109,6 +111,8 @@ void kernel_main(Boot_Info* boot_info)
 	timer_install(); //For now there is no handler so it just prints the interrupt
 
 	keyboard_init();
+
+	scheduler_init();
 	
 	/* Enable interrupts */
 	__asm__ volatile("sti");
