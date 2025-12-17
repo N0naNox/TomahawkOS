@@ -61,7 +61,6 @@ static void set_idt_gate(int n, uint64_t handler, uint16_t selector, uint8_t typ
 
 /* PIC remap to avoid conflicts with CPU exceptions */
 static void pic_remap(void) {
-    uart_puts("PIC remap start\n");
     hal_outb(0x20, 0x11);
     hal_outb(0xA0, 0x11);
     hal_outb(0x21, 0x20);
@@ -74,25 +73,13 @@ static void pic_remap(void) {
     /* Mask all IRQs except IRQ1 (keyboard) */
     hal_outb(0x21, 0xFD);  /* 11111101 - only IRQ1 unmasked */
     hal_outb(0xA1, 0xFF);  /* All slave IRQs masked */
-    uart_puts("PIC mask set to 0xFD (IRQ1 enabled)\n");
 }
 
 void isr_common_handler(regs_t* r) {
-    uart_puts("INT: ");
-    uart_puthex(r->int_no);
-    uart_puts(" ERR: ");
-    uart_puthex(r->err_code);
-    uart_puts(" RIP: ");
-    uart_puthex(r->rip);
-    uart_puts("\n");
-
     if (r->int_no < IDT_ENTRIES && interrupt_handlers[r->int_no]) {
         interrupt_handlers[r->int_no](r);
     } else {
         /* No handler: simple halt for now */
-        uart_puts("No handler for interrupt ");
-        uart_puthex(r->int_no);
-        uart_puts("\n");
         for(;;) { __asm__ volatile("hlt"); }
     }
 }
