@@ -210,11 +210,6 @@ irq%1:
     push r15
 
     mov rdi, rsp
-    ; debug: signal IRQ fired on COM1 (safe: rax saved on stack)
-    %if %1 = 1
-        mov al, 'K'
-        out 0x3F8, al
-    %endif
     call isr_common_handler
 
     ; send PIC EOI(s) while registers are still saved

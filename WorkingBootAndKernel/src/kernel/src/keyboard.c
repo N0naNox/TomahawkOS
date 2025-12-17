@@ -32,7 +32,6 @@ static const char scancode_map[128] = {
 /* IRQ handler called from C via isr_common_handler */
 static void keyboard_irq_handler(regs_t* r) {
     (void)r;
-    uart_putchar('H');
     /* Read scancode */
     uint8_t sc = hal_inb(0x60);
 
