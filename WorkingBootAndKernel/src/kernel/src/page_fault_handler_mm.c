@@ -8,6 +8,8 @@
 #include "page_fault_handler.h"
 #include "mm.h"
 #include "paging.h"
+#include "frame_alloc.h"
+#include <string.h>
 #include "uart.h"
 
 extern mm_struct* current_mm; /* from mm.c */

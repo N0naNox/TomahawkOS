@@ -2,6 +2,7 @@
 #include "idt.h"
 #include "hal_port_io.h"
 #include <stdint.h>
+#include <uart.h>
 
 /* PIC ports */
 #define PIC1_CMD  0x20
@@ -47,7 +48,9 @@ static void enable_irq0_master_pic(void) {
 void timer_irq_handler(regs_t* r) {
     (void)r;
     timer_ticks++;
-    pic_send_eoi();
+    if (timer_ticks == 1) {
+        uart_puts("timer: first tick\n");
+    }
 }
 
 /* Install timer */

@@ -10,5 +10,6 @@ void keyboard_init(void);
 
 /* Non-blocking getchar (returns 0 if no char available) */
 char keyboard_getchar(void);
+void keyboard_poll_once(void);
 
 #endif /* KEYBOARD_H */

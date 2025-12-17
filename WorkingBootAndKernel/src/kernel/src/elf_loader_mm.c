@@ -16,6 +16,7 @@
 #include "elf.h"
 #include "mm.h"
 #include "paging.h"
+#include "frame_alloc.h"
 #include "uart.h"
 #include "string.h" /* your kernel memcpy/memset */
 

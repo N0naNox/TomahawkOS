@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <uart.h>
 
+#define KERNEL_VIRT_BASE 0xFFFFFFFF80000000ULL
+
 #define IDT_ENTRIES 256
 
 struct idt_ptr {
@@ -31,6 +33,11 @@ static struct idt_ptr idtp;
 
 static interrupt_handler_t interrupt_handlers[IDT_ENTRIES];
 
+/* Lightweight interrupt log for post-ISR consumption in the main loop */
+static volatile uint64_t log_seq = 0;
+static volatile uint64_t log_int_no = 0;
+static volatile uint64_t log_err = 0;
+
 extern void idt_flush(void* idt_ptr);
 
 /* ISR/IRQ stubs provided by idt_asm.asm */
@@ -47,6 +54,9 @@ extern void irq0(void); extern void irq1(void); extern void irq2(void); extern v
 extern void irq4(void); extern void irq5(void); extern void irq6(void); extern void irq7(void);
 extern void irq8(void); extern void irq9(void); extern void irq10(void); extern void irq11(void);
 extern void irq12(void); extern void irq13(void); extern void irq14(void); extern void irq15(void);
+
+/* Forward declaration of page fault handler */
+extern int page_fault_handler(uint64_t error_code, uint64_t faulting_address);
 
 /* Helper to set an IDT entry */
 static void set_idt_gate(int n, uint64_t handler, uint16_t selector, uint8_t type_attr, uint8_t ist) {
@@ -76,12 +86,28 @@ static void pic_remap(void) {
 }
 
 void isr_common_handler(regs_t* r) {
+    /* Record last interrupt for main-loop polling */
+    log_int_no = r->int_no;
+    log_err = r->err_code;
+    log_seq++;
+
     if (r->int_no < IDT_ENTRIES && interrupt_handlers[r->int_no]) {
         interrupt_handlers[r->int_no](r);
     } else {
-        /* No handler: simple halt for now */
-        for(;;) { __asm__ volatile("hlt"); }
+        /* No registered handler; return to caller */
     }
+}
+
+/* Wrapper for page fault handler (vector 14) to extract CR2 and call the C handler */
+static void page_fault_wrapper(regs_t* r) {
+    uint64_t cr2;
+    __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+    uart_puts("#PF err=");
+    uart_putu(r->err_code);
+    uart_puts(" cr2=");
+    uart_putu(cr2);
+    uart_puts("\n");
+    page_fault_handler(r->err_code, cr2);
 }
 
 void register_interrupt_handler(int n, interrupt_handler_t h) {
@@ -90,6 +116,17 @@ void register_interrupt_handler(int n, interrupt_handler_t h) {
 
 void unregister_interrupt_handler(int n) {
     if (n >= 0 && n < IDT_ENTRIES) interrupt_handlers[n] = 0;
+}
+
+/* Retrieve last interrupt log; returns 1 if new data was read */
+int idt_read_last_int(uint64_t* int_no, uint64_t* err_code, uint64_t* seq_out) {
+    static uint64_t last_seq = 0;
+    if (log_seq == last_seq) return 0;
+    last_seq = log_seq;
+    if (int_no) *int_no = log_int_no;
+    if (err_code) *err_code = log_err;
+    if (seq_out) *seq_out = log_seq;
+    return 1;
 }
 
 void idt_install(void) {
@@ -135,6 +172,9 @@ void idt_install(void) {
     set_idt_gate(30, (uint64_t)isr30, cs, 0x8E, 0);
     set_idt_gate(31, (uint64_t)isr31, cs, 0x8E, 0);
 
+    /* Register page fault handler wrapper */
+    register_interrupt_handler(14, page_fault_wrapper);
+
     /* Remap PIC and install IRQs 32..47 */
     pic_remap();
 
@@ -156,5 +196,11 @@ void idt_install(void) {
     set_idt_gate(47, (uint64_t)irq15, cs, 0x8E, 0);
 
     /* Load IDT */
+    idt_flush(&idtp);
+}
+
+void idt_reload_high(void) {
+    /* Adjust IDT base to its higher-half alias and reload. */
+    idtp.base = ((uint64_t)&idt) + KERNEL_VIRT_BASE;
     idt_flush(&idtp);
 }

@@ -18,33 +18,26 @@
  *
  */
 
-
- //the assumptions exist because waiting for tom to upload page frame allocator
-
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h> /* for memset */
-
-
+#include <uart.h>
 
 /* Include header */
 #include "paging.h"
+#include "frame_alloc.h"
 
 /* phys->virt mapping offset (virt = phys + phys_map_offset) */
 static uintptr_t g_phys_map_offset = 0;
 
+/* Higher-half base for the kernel mapping (virt alias of the physical kernel). */
+#define KERNEL_VIRT_BASE 0xFFFFFFFF80000000ULL
+
 
 
 /* Forward declarations of allocator provided by kernel (implement these) */
-uintptr_t pfa_alloc_frame(void)
-{
-    /* Placeholder implementation; replace with your frame allocator */
-    return 0;
-}
-void pfa_free_frame(uintptr_t paddr)
-{
-    /* Placeholder implementation; replace with your frame allocator */
-}
+/* Now provided by frame_alloc.c - removed placeholders */
+
 
 
 
@@ -94,7 +87,10 @@ static uintptr_t ensure_table(uintptr_t parent_phys, uint64_t index) {
         return (uintptr_t)(ent & PTE_ADDR_MASK);
     }
     uintptr_t child = alloc_zeroed_page();
-    if (!child) return 0;
+    if (!child) {
+        uart_puts("paging: alloc_zeroed_page failed in ensure_table\n");
+        return 0;
+    }
     /* Set parent entry: child phys | present | rw */
     uint64_t newent = (child & PTE_ADDR_MASK) | PTE_PRESENT | PTE_RW;
     write_entry(parent_phys, index, newent);
@@ -103,23 +99,33 @@ static uintptr_t ensure_table(uintptr_t parent_phys, uint64_t index) {
 
 /* Map a single 4 KiB page (creates intermediate tables as needed). */
 int paging_map_page(uintptr_t pml4_phys, uint64_t vaddr, uintptr_t paddr, uint64_t flags) {
-    if (!pml4_phys || !paddr) return -1;
+    if (!pml4_phys) return -1;
 
     uint64_t i4 = pml4_index(vaddr);
     uint64_t i3 = pdpt_index(vaddr);
     uint64_t i2 = pd_index(vaddr);
     uint64_t i1 = pt_index(vaddr);
 
-    uintptr_t pdpt = ensure_table(pml4_phys, i4);
-    if (!pdpt) return -2;
-    uintptr_t pd = ensure_table(pdpt, i3);
-    if (!pd) return -3;
-    uintptr_t pt = ensure_table(pd, i2);
-    if (!pt) return -4;
+    uintptr_t pdpt_phys = ensure_table(pml4_phys, i4);
+    if (!pdpt_phys) {
+        uart_puts("paging: ensure pdpt failed\n");
+        return -1;
+    }
+    uintptr_t pd_phys = ensure_table(pdpt_phys, i3);
+    if (!pd_phys) {
+        uart_puts("paging: ensure pd failed\n");
+        return -1;
+    }
+
+    uintptr_t pt_phys = ensure_table(pd_phys, i2);
+    if (!pt_phys) {
+        uart_puts("paging: ensure pt failed\n");
+        return -1;
+    }
 
     uint64_t entry = (paddr & PTE_ADDR_MASK) | (flags & ~PTE_ADDR_MASK);
     entry |= PTE_PRESENT; /* ensure present */
-    write_entry(pt, i1, entry);
+    write_entry(pt_phys, i1, entry);
     return 0;
 }
 
@@ -155,6 +161,18 @@ int paging_unmap_page(uintptr_t pml4_phys, uint64_t vaddr) {
 
     write_entry(pt, i1, 0); /* clear entry */
     /* Note: we do not INVLPG here; caller should if necessary, or switch CR3. */
+    return 0;
+}
+
+/* Unmap consecutive pages (n_pages). */
+int paging_unmap_range(uintptr_t pml4_phys, uint64_t vaddr, size_t n_pages) {
+    for (size_t i = 0; i < n_pages; i++) {
+        int r = paging_unmap_page(pml4_phys, vaddr + (i << PAGE_SHIFT));
+        if (r && r != -2 && r != -3 && r != -4) {
+            /* Skip silently if intermediate tables missing; otherwise return error. */
+            return r;
+        }
+    }
     return 0;
 }
 
@@ -209,4 +227,78 @@ uintptr_t paging_get_current_cr3() {
     uintptr_t cr3;
     __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
     return cr3;
+}
+
+/*
+ * paging_setup_kernel_pml4()
+ *
+ * Sets up the kernel's initial PML4 with identity mappings for:
+ *   1. Kernel code/data/stack (kernel_start to kernel_end)
+ *   2. Early I/O region (0 to 4 MiB)
+ *   3. GOP framebuffer (0x80000000, assuming 1024x768 ~3 MiB, map 4 MiB)
+ *
+ * Returns physical address of the kernel PML4, or 0 on failure.
+ *
+ * NOTE: Assumes identity mapping (virt == phys, phys_map_offset == 0).
+ * If you change phys_map_offset, kernel page tables must account for that.
+ */
+
+extern uintptr_t kernel_start;  /* from kernel.ld */
+extern uintptr_t kernel_end;    /* from kernel.ld */
+
+#define FRAMEBUFFER_PADDR  0x80000000ULL
+#define FRAMEBUFFER_SIZE   (4 * 1024 * 1024)  /* 4 MiB to be safe */
+#define EARLY_IO_SIZE      (4 * 1024 * 1024)  /* Minimal low window for early identity access */
+
+uintptr_t paging_setup_kernel_pml4(void) {
+    /* Create kernel PML4 */
+    uintptr_t pml4 = paging_create_pml4();
+    if (!pml4) return 0;
+
+    uart_puts("paging: pml4 allocated\n");
+
+    /* Identity-map kernel region (kernel_start to kernel_end) */
+    uintptr_t kstart = (uintptr_t)&kernel_start;
+    uintptr_t kend   = (uintptr_t)&kernel_end;
+    
+    /* Align down to page boundary for start */
+    uintptr_t kstart_aligned = kstart & ~(PAGE_SIZE - 1);
+    /* Align up to page boundary for end */
+    uintptr_t kend_aligned = (kend + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    
+    size_t n_kernel_pages = (kend_aligned - kstart_aligned) / PAGE_SIZE;
+    
+    const uint64_t k_flags = PTE_PRESENT | PTE_RW | PTE_GLOBAL;
+
+    if (paging_map_range(pml4, kstart_aligned, kstart_aligned,
+                         n_kernel_pages, k_flags)) {
+        uart_puts("paging: map kernel failed\n");
+        return 0;  /* fail */
+    }
+
+    /* Higher-half alias for the kernel region */
+    uintptr_t kvirt_base = KERNEL_VIRT_BASE + kstart_aligned;
+    if (paging_map_range(pml4, kvirt_base, kstart_aligned,
+                         n_kernel_pages, k_flags)) {
+        uart_puts("paging: map higher-half kernel failed\n");
+        return 0;
+    }
+
+    /* Identity-map early I/O region (0 to 4 MiB) */
+    size_t n_io_pages = EARLY_IO_SIZE / PAGE_SIZE;
+    if (paging_map_range(pml4, 0, 0, n_io_pages, PTE_PRESENT | PTE_RW | PTE_GLOBAL)) {
+        uart_puts("paging: map io failed\n");
+        return 0;
+    }
+
+    /* Identity-map GOP framebuffer (0x80000000 for ~4 MiB) */
+    size_t n_fb_pages = (FRAMEBUFFER_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (paging_map_range(pml4, FRAMEBUFFER_PADDR, FRAMEBUFFER_PADDR,
+                         n_fb_pages, PTE_PRESENT | PTE_RW | PTE_GLOBAL)) {
+        uart_puts("paging: map fb failed\n");
+        return 0;
+    }
+
+    uart_puts("paging: kernel pml4 ready\n");
+    return pml4;
 }

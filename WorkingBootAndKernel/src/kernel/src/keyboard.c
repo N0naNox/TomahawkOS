@@ -44,22 +44,24 @@ static void keyboard_irq_handler(regs_t* r) {
     if (sc < sizeof(scancode_map)) c = scancode_map[sc];
 
     if (c) {
-        /* echo to VGA and serial */
-        vga_putc(c);
-        uart_putchar(c);
-        /* push into buffer (non-blocking, drop on full) */
+        /* Minimal ISR work: buffer enqueue only */
         int next = (kb_head + 1) & (sizeof(kb_buf)-1);
         if (next != kb_tail) {
             kb_buf[kb_head] = c;
             kb_head = next;
         }
     }
+
     /* Note: EOI is sent by the IRQ stub in idt_asm.asm */
 }
 
 void keyboard_init(void) {
-    /* Register handler at vector 33 (IRQ1 -> 32+1) */
+    /* Register IRQ1 handler and unmask keyboard IRQ on the master PIC */
     register_interrupt_handler(32 + 1, keyboard_irq_handler);
+
+    uint8_t mask = hal_inb(0x21);
+    mask &= ~(1 << 1); /* clear bit1 to enable IRQ1 */
+    hal_outb(0x21, mask);
 }
 
 char keyboard_getchar(void) {
@@ -67,4 +69,28 @@ char keyboard_getchar(void) {
     char c = kb_buf[kb_tail];
     kb_tail = (kb_tail + 1) & (sizeof(kb_buf)-1);
     return c;
+}
+
+/* Polling fallback: check controller status and echo if data ready. */
+void keyboard_poll_once(void) {
+    /* Status port 0x64, bit0=output buffer full */
+    uint8_t st = hal_inb(0x64);
+    if ((st & 0x01) == 0) return;
+
+    uint8_t sc = hal_inb(0x60);
+
+    /* Ignore break codes */
+    if (sc & 0x80) return;
+
+    char c = 0;
+    if (sc < sizeof(scancode_map)) c = scancode_map[sc];
+    if (!c) return;
+
+    uart_putchar(c);
+
+    int next = (kb_head + 1) & (sizeof(kb_buf)-1);
+    if (next != kb_tail) {
+        kb_buf[kb_head] = c;
+        kb_head = next;
+    }
 }
