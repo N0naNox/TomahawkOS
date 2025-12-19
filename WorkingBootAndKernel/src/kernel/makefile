@@ -17,7 +17,9 @@ MAKEFLAGS += --no-builtin-rules
 ARCH := x86_64
 CC   := ${ARCH}-elf-gcc
 
-SRC_DIR := src
+BUILD_DIR := build
+OBJ_DIR   := ${BUILD_DIR}
+SRC_DIR   := src
 
 INCLUDE_DIRS := ${SRC_DIR}/include
 INCLUDE_FLAG := ${foreach d, ${INCLUDE_DIRS}, -I$d}
@@ -41,11 +43,12 @@ LDFLAGS :=          \
 LIBS := -lgcc
 
 
-AS_SOURCES := ${SRC_DIR}/switch.S
+AS_SOURCES :=
 
 NASM_SOURCES := ${SRC_DIR}/entry.asm \
 	${SRC_DIR}/hal_port_io_asm.asm \
-	${SRC_DIR}/idt_asm.asm
+	${SRC_DIR}/idt_asm.asm \
+	${SRC_DIR}/switch.asm
 
 C_SOURCES  :=              \
 	${SRC_DIR}/hal_port_io.c \
@@ -66,14 +69,13 @@ C_SOURCES  :=              \
 	${SRC_DIR}/string.c   \
 	${SRC_DIR}/vga.c	\
 
-AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
-NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}
-C_OBJECTS   := ${C_SOURCES:.c=.o}
+AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
+NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})
+C_OBJECTS    := $(patsubst ${SRC_DIR}/%.c,${OBJ_DIR}/%.o,${C_SOURCES})
 
 OBJECTS := ${AS_OBJECTS} ${NASM_OBJECTS} ${C_OBJECTS}
 
 
-BUILD_DIR  := build
 BINARY     := ${BUILD_DIR}/kernel.elf
 
 
@@ -84,14 +86,14 @@ all: ${BINARY}
 ${BINARY}: ${BUILD_DIR} ${OBJECTS}
 	${CC} -T ${SRC_DIR}/kernel.ld -g3 -o ${BINARY} ${LDFLAGS} ${OBJECTS} ${LIBS}
 
-%.as.o: %.S
+${OBJ_DIR}/%.as.o: ${SRC_DIR}/%.S | ${BUILD_DIR}
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}
 
 
-%.o: %.c
+${OBJ_DIR}/%.o: ${SRC_DIR}/%.c | ${BUILD_DIR}
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}
 
-%.o: %.asm
+${OBJ_DIR}/%.o: ${SRC_DIR}/%.asm | ${BUILD_DIR}
 	nasm -f elf64 $< -o $@
 
 ${BUILD_DIR}:

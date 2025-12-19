@@ -8,6 +8,7 @@ ARCH := x86_64
 CC   := x86_64-linux-gnu-gcc
 
 BUILD_DIR  := build
+OBJ_DIR    := ${BUILD_DIR}
 SRC_DIR    := src
 
 EFI_INC_DIR  := /usr/include/efi
@@ -58,8 +59,8 @@ C_SOURCES := ${SRC_DIR}/elf.c    \
 AS_SOURCES :=
 
 
-OBJECTS := ${C_SOURCES:.c=.o}
-OBJECTS += ${AS_SOURCES:.S=.o}
+OBJECTS := $(patsubst ${SRC_DIR}/%.c,${OBJ_DIR}/%.o,${C_SOURCES})
+OBJECTS += $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.o,${AS_SOURCES})
 
 # The bootloader is initially compiled into a shared lib in ELF format. GNU-EFI links
 # the lib in a special format as to be easily copied into a PE32+ compatible executable
@@ -87,10 +88,10 @@ ${BINARY_EFI}: ${BINARY_ELF}
 ${BINARY_ELF}: ${OBJECTS} ${BUILD_DIR}
 	ld ${LDFLAGS} ${OBJECTS} -o $@ -lefi -lgnuefi
 
-%.o: %.c
+${OBJ_DIR}/%.o: ${SRC_DIR}/%.c | ${BUILD_DIR}
 	${CC} ${CFLAGS} -o $@ -c $<
 
-%.o: %.S
+${OBJ_DIR}/%.o: ${SRC_DIR}/%.S | ${BUILD_DIR}
 	${CC} ${CFLAGS} -o $@ -c $<
 
 ${BUILD_DIR}:

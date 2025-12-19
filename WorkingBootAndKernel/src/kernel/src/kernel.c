@@ -22,6 +22,26 @@
 #include "include/scheduler.h"
 #include "include/proc.h"
 
+/* Demo threads and helpers */
+static void demo_thread_a(void);
+static void demo_thread_b(void);
+static void demo_esc_watcher(void);
+static void menu_thread(void);
+static void idle_thread(void);
+static void keyboard_flush(void);
+
+typedef enum {
+	DEMO_ECHO = 1,
+	DEMO_SCHED = 2
+} demo_mode_t;
+
+static demo_mode_t select_demo(void);
+static void run_echo_demo(void);
+static void run_scheduler_demo(void);
+static void demo_busywait(void);
+
+static volatile int demo_stop_requested = 0;
+
 /** Whether to draw a test pattern to video output. */
 #define DRAW_TEST_SCREEN 1
 
@@ -221,29 +241,140 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	vga_init_fb((void*)fb, width, height, pitch);
 	vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
 	
-	/* Timer temporarily disabled until scheduler logic is ready */
-	//timer_install();
+	/* Install PIT timer for preemptive scheduling */
+	timer_install();
 
 	keyboard_init();
 
 	scheduler_init();
-	
-	/* Enable interrupts */
-	__asm__ volatile("sti");
-	
-	const char* ready = "Keyboard ready - type something!\n";
-	for (int i = 0; ready[i]; i++) {
-		outb(0x3F8, ready[i]);
-	}
-	
-	vga_write("Type on keyboard: ");
 
-	/* Infinite loop */
+	/* Create essential threads */
+	create_process("idle", idle_thread);
+	create_process("menu", menu_thread);
+
+	/* Enable interrupts and let the scheduler take over */
+	__asm__ volatile("sti");
+
+	/* Yield from bootstrap context into first scheduled thread */
+	while (1) {
+		__asm__ volatile("hlt");
+	}
+}
+
+static demo_mode_t select_demo(void) {
 	while (1) {
 		char c = keyboard_getchar();
+		if (c == '1') {
+			return DEMO_ECHO;
+		} else if (c == '2') {
+			return DEMO_SCHED;
+		}
+	}
+}
+
+static void demo_busywait(void) {
+	for (volatile int i = 0; i < 2000000; i++) {
+		__asm__ volatile("pause");
+	}
+}
+
+static void demo_thread_a(void) {
+	while (!demo_stop_requested) {
+		uart_puts("[thread A] hello\n");
+		demo_busywait();
+	}
+	scheduler_thread_exit();
+}
+
+static void demo_thread_b(void) {
+	while (!demo_stop_requested) {
+		uart_puts("[thread B] hello\n");
+		demo_busywait();
+	}
+	scheduler_thread_exit();
+}
+
+static void demo_esc_watcher(void) {
+	while (!demo_stop_requested) {
+		char c = keyboard_getchar();
+		if (c == 27) { /* ESC */
+			demo_stop_requested = 1;
+			break;
+		}
+		__asm__ volatile("pause");
+	}
+	scheduler_thread_exit();
+}
+
+static void idle_thread(void) {
+	for (;;) {
+		__asm__ volatile("hlt");
+	}
+}
+
+static void run_echo_demo(void) {
+	vga_write("Starting keyboard echo demo (ESC to stop)...\n");
+	uart_puts("Starting keyboard echo demo (ESC to stop)...\n");
+
+	while (1) {
+		char c = keyboard_getchar();
+		if (c == 27) { /* ESC */
+			break;
+		}
 		if (c) {
 			vga_putc(c);
 		}
 		__asm__ volatile("pause");
+	}
+}
+
+static void run_scheduler_demo(void) {
+	vga_write("Starting scheduler demo (ESC to stop)...\n");
+	uart_puts("Starting scheduler demo (ESC to stop)...\n");
+
+	demo_stop_requested = 0;
+	create_process("esc-watcher", demo_esc_watcher);
+	create_process("demo-a", demo_thread_a);
+	create_process("demo-b", demo_thread_b);
+
+	/* Wait until ESC is pressed */
+	while (!demo_stop_requested) {
+		__asm__ volatile("pause");
+	}
+
+	vga_write("Stopping scheduler demo...\n");
+	uart_puts("Stopping scheduler demo...\n");
+	/* Allow demo threads to notice stop flag and exit */
+	for (volatile int i = 0; i < 5000000; i++) {
+		__asm__ volatile("pause");
+	}
+}
+
+static void menu_thread(void) {
+	for (;;) {
+		keyboard_flush();
+		/* Clear screen and prompt */
+		vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+		uart_puts("Select demo: 1=echo, 2=scheduler\n");
+		vga_write("Select demo:\n");
+		vga_write("  1) Keyboard echo\n");
+		vga_write("  2) Scheduler threads (ESC to stop)\n");
+		vga_write("Press 1 or 2...\n");
+
+		demo_mode_t mode = select_demo();
+
+		if (mode == DEMO_SCHED) {
+			run_scheduler_demo();
+		} else {
+			run_echo_demo();
+		}
+
+		keyboard_flush();
+	}
+}
+
+static void keyboard_flush(void) {
+	while (keyboard_getchar()) {
+		/* discard */
 	}
 }

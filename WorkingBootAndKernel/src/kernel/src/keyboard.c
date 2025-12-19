@@ -41,7 +41,11 @@ static void keyboard_irq_handler(regs_t* r) {
     }
 
     char c = 0;
-    if (sc < sizeof(scancode_map)) c = scancode_map[sc];
+    if (sc == 0x01) {
+        c = 27; /* ESC */
+    } else if (sc < sizeof(scancode_map)) {
+        c = scancode_map[sc];
+    }
 
     if (c) {
         /* Minimal ISR work: buffer enqueue only */

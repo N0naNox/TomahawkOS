@@ -1,6 +1,7 @@
 #include "include/scheduler.h"
 #include "include/proc.h"
 #include "include/string.h"
+#include "include/idt.h"
 
 /* Basic cooperative round-robin scheduler.
  * - Single global ready queue (singly linked list using t->next)
@@ -23,6 +24,17 @@ static tcb_t* current = NULL;
 /* Kernel context placeholder used when switching from kernel to first thread */
 static cpu_context_t kernel_context;
 
+static void enqueue_ready(tcb_t* t) {
+    if (!t) return;
+    t->next = NULL;
+    if (!ready_head) {
+        ready_head = ready_tail = t;
+    } else {
+        ready_tail->next = t;
+        ready_tail = t;
+    }
+}
+
 void scheduler_init(void) {
     ready_head = ready_tail = NULL;
     current = NULL;
@@ -32,13 +44,7 @@ void scheduler_init(void) {
 void scheduler_add_thread(tcb_t* t) {
     if (!t) return;
     t->state = THREAD_READY;
-    t->next = NULL;
-    if (!ready_head) {
-        ready_head = ready_tail = t;
-    } else {
-        ready_tail->next = t;
-        ready_tail = t;
-    }
+    enqueue_ready(t);
 }
 
 /* Pop next ready thread or return NULL */
@@ -83,6 +89,63 @@ void scheduler_yield(void) {
     } else {
         context_switch(&old->context, &next->context);
     }
+}
+
+static void save_context_from_regs(tcb_t* t, regs_t* r) {
+    if (!t || !r) return;
+    t->context.rip = r->rip;
+    t->context.rsp = r->rsp;
+    t->context.rbp = r->rbp;
+    t->context.rbx = r->rbx;
+    t->context.r12 = r->r12;
+    t->context.r13 = r->r13;
+    t->context.r14 = r->r14;
+    t->context.r15 = r->r15;
+}
+
+static void load_regs_from_context(regs_t* r, const cpu_context_t* c) {
+    if (!r || !c) return;
+    r->rip = c->rip;
+    r->rsp = c->rsp;
+    r->rbp = c->rbp;
+    r->rbx = c->rbx;
+    r->r12 = c->r12;
+    r->r13 = c->r13;
+    r->r14 = c->r14;
+    r->r15 = c->r15;
+}
+
+void scheduler_tick(regs_t* r) {
+    if (!r) return;
+
+    /* If no current thread yet, start first ready thread */
+    if (!current) {
+        tcb_t* next = dequeue_next();
+        if (!next) return;
+        current = next;
+        current->state = THREAD_RUNNING;
+        load_regs_from_context(r, &next->context);
+        return;
+    }
+
+    /* Save interrupted thread context */
+    save_context_from_regs(current, r);
+
+    tcb_t* next = dequeue_next();
+    if (!next) {
+        return;
+    }
+
+    /* Round-robin: place current back on ready queue if still runnable */
+    if (current->state == THREAD_RUNNING || current->state == THREAD_READY) {
+        current->state = THREAD_READY;
+        enqueue_ready(current);
+    }
+
+    /* Switch to next */
+    current = next;
+    current->state = THREAD_RUNNING;
+    load_regs_from_context(r, &next->context);
 }
 
 void scheduler_thread_exit(void) {

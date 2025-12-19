@@ -1,6 +1,7 @@
 #include "timer.h"
 #include "idt.h"
 #include "hal_port_io.h"
+#include "scheduler.h"
 #include <stdint.h>
 #include <uart.h>
 
@@ -46,11 +47,15 @@ static void enable_irq0_master_pic(void) {
 
 /* Timer IRQ handler just counts ticks */
 void timer_irq_handler(regs_t* r) {
-    (void)r;
     timer_ticks++;
     if (timer_ticks == 1) {
         uart_puts("timer: first tick\n");
     }
+
+    /* Preemptive round robin: trigger scheduler */
+    scheduler_tick(r);
+
+    pic_send_eoi();
 }
 
 /* Install timer */

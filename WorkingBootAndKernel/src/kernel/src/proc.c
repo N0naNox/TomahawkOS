@@ -57,6 +57,7 @@ tcb_t* create_thread(pcb_t* proc, void (*entry)(void)) {
     stack_ptr--;
     *stack_ptr = 0;
     t->context.rsp = (uint64_t)stack_ptr;
+    t->context.rbp = t->context.rsp;
 
     /* Link to process thread list */
     if (proc) {

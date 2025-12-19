@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include "proc.h"
+#include "idt.h"
 
 /* Initialize scheduler */
 void scheduler_init(void);
@@ -14,6 +15,9 @@ void scheduler_add_thread(tcb_t* t);
 
 /* Yield the CPU from current thread to next ready thread */
 void scheduler_yield(void);
+
+/* Timer tick handler: preempt current thread if another is ready */
+void scheduler_tick(regs_t* r);
 
 /* Return pointer to current running thread */
 tcb_t* scheduler_current(void);
