@@ -67,22 +67,22 @@ isr%1:
     mov rdi, rsp
     call isr_common_handler
 
-    ; restore registers (reverse order)
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
+    ; restore registers (reverse push order: rax was pushed last)
     pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
 
     ; skip int_no and err_code
     add rsp, 16
@@ -127,22 +127,22 @@ isr%1:
     mov rdi, rsp
     call isr_common_handler
 
-    ; restore registers
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
+    ; restore registers (reverse push order)
     pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
 
     ; skip int_no and cpu-pushed err_code
     add rsp, 16
@@ -184,22 +184,22 @@ irq%1:
     mov al, 0x20
     out 0x20, al
 
-    ; restore registers
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
+    ; restore registers (reverse push order)
     pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
 
     ; remove int_no and err_code
     add rsp, 16

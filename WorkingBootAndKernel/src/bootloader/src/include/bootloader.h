@@ -15,6 +15,9 @@
 #include <fs.h>
 #include <serial.h>
 
+/* Force debug logging off for normal builds. */
+#undef DEBUG
+
 /** The path to the kernel executable binary on the bootable media. */
 #define KERNEL_EXECUTABLE_PATH L"\\kernel.elf"
 

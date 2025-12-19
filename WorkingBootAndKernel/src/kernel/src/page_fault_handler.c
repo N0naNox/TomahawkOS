@@ -2,6 +2,7 @@
 #include <uart.h>
 #include <stdint.h>
 #include "paging.h"
+#include "frame_alloc.h"
 
 /*
 Error code bits:
@@ -38,7 +39,7 @@ int page_fault_handler(uint64_t error_code, uint64_t faulting_address)
         if (r == 0)
         {
             uart_puts("Page fault resolved.\n");
-            return; // continue execution
+            return 0; // continue execution
         }
 
         uart_puts("page_not_present_handler FAILED!\n");
@@ -50,6 +51,7 @@ int page_fault_handler(uint64_t error_code, uint64_t faulting_address)
 
     uart_puts("FATAL: System halted.\n");
     while (1) { __asm__("hlt"); }
+    return -1;
 }
 
 

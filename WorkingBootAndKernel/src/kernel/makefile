@@ -53,6 +53,7 @@ C_SOURCES  :=              \
 	${SRC_DIR}/keyboard.c    \
 	${SRC_DIR}/kernel.c      \
 	${SRC_DIR}/uart.c        \
+	${SRC_DIR}/frame_alloc.c \
 	${SRC_DIR}/paging.c      \
 	${SRC_DIR}/page_fault_handler.c \
 	${SRC_DIR}/elf_loader.c \

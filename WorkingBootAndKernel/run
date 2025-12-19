@@ -1,4 +1,14 @@
 #!/bin/bash
 make clean -C src
 make -C src all
-make -C src emu
+qemu-system-x86_64 \
+	-no-reboot -no-shutdown \
+	-bios OVMF.fd \
+	-drive if=none,id=uas-disk1,file=./build/kernel.img,format=raw \
+	-device usb-storage,drive=uas-disk1 \
+	-serial stdio \
+	-usb \
+	-net none \
+	-vga std
+# fallback to legacy target
+# make -C src emu
