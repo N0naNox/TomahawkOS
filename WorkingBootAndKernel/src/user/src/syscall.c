@@ -4,10 +4,10 @@
 
 void sys_yield(void) {
     __asm__ volatile (
-        "mov $SYS_YIELD, %%rax \n"
-        "syscall              \n"
+        "mov %0, %%rax \n"
+        "syscall       \n"
         :
-        :
+        : "i"(SYS_YIELD)
         : "rax", "rcx", "r11", "memory"
     );
 }

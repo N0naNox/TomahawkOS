@@ -1,7 +1,7 @@
 #include "syscall.h"
 
-void user_main(void) {
+void _start(void) {
     while (1) {
-        sys_yield();
+        sys_yield();   // test syscall
     }
 }
