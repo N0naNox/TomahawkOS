@@ -21,6 +21,9 @@
 #include "timer.h"
 #include "include/scheduler.h"
 #include "include/proc.h"
+#include "include/syscall_init.h"
+#include "include/syscall.h"
+#include "include/syscall_numbers.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -201,6 +204,9 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	gdt_reload_high();
 	idt_reload_high();
 	/* Keep the identity mapping for now to avoid early faults; we already run from higher half. */
+
+	/* Initialize user syscall machinery */
+	syscall_init();
 
 	if (boot_info->video_mode_info.framebuffer_pointer == NULL) {
 		const char* no_gfx = "ERROR: No framebuffer\n";
