@@ -20,6 +20,10 @@ KERNEL_BINARY     := ${KERNEL_DIR}/build/kernel.elf
 BOOTLOADER_DIR    := bootloader
 BOOTLOADER_BINARY := ${BOOTLOADER_DIR}/build/bootx64.efi
 
+USER_DIR        := user
+USER_BINARY     := ${USER_DIR}/build/user.elf
+
+
 BUILD_DIR         := ../build
 DISK_IMG          := ${BUILD_DIR}/kernel.img
 DISK_IMG_SIZE     := 2880
@@ -52,7 +56,9 @@ emu: ${DISK_IMG}
 
 kernel: ${KERNEL_BINARY}
 
-${DISK_IMG}: ${BUILD_DIR} ${BOOTLOADER_BINARY} ${KERNEL_BINARY}
+user: ${USER_BINARY}
+
+${DISK_IMG}: ${BUILD_DIR} ${BOOTLOADER_BINARY} ${KERNEL_BINARY} ${USER_BINARY}
 	# Create UEFI boot disk image in DOS format.
 	dd if=/dev/zero of=${DISK_IMG} bs=1k count=${DISK_IMG_SIZE}
 	mformat -i ${DISK_IMG} -f ${DISK_IMG_SIZE} ::
@@ -61,6 +67,8 @@ ${DISK_IMG}: ${BUILD_DIR} ${BOOTLOADER_BINARY} ${KERNEL_BINARY}
 	# Copy the bootloader to the boot partition.
 	mcopy -i ${DISK_IMG} ${BOOTLOADER_BINARY} ::/efi/boot/bootx64.efi
 	mcopy -i ${DISK_IMG} ${KERNEL_BINARY} ::/kernel.elf
+	mcopy -i ${DISK_IMG} ${USER_BINARY} ::/user.elf
+
 
 ${BOOTLOADER_BINARY}:
 	make -C ${BOOTLOADER_DIR}
@@ -71,8 +79,14 @@ ${BUILD_DIR}:
 ${KERNEL_BINARY}:
 	make -C ${KERNEL_DIR}
 
+${USER_BINARY}:
+	make -C ${USER_DIR}
+
 clean:
 	make clean -C ${BOOTLOADER_DIR}
 	make clean -C ${KERNEL_DIR}
+	make clean -C ${USER_DIR}
 	rm -f ${DISK_IMG}
 	rm -rf ${BUILD_DIR}
+	
+
