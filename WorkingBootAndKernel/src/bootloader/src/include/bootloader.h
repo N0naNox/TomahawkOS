@@ -1,8 +1,5 @@
 /**
- * @file bootloader.h
- * @author ajxs
- * @date Aug 2019
- * @brief Core bootloader functionality.
+ * Core bootloader functionality.
  * Functions that are part of the core bootloader functionality.
  */
 

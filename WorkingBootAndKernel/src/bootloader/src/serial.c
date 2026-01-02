@@ -1,8 +1,5 @@
 /**
- * @file serial.c
- * @author ajxs
- * @date Aug 2019
- * @brief Serial IO functionality.
+ * Serial IO functionality.
  * Contains functionality for serial IO.
  */
 

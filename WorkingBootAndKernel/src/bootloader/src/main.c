@@ -1,8 +1,5 @@
-/**
- * @file main.c
- * @author ajxs
- * @date Aug 2019
- * @brief Bootloader entry point and main application.
+/*
+ * Bootloader entry point and main application.
  * The entry point for the application. Contains the main bootloader code that
  * initiates the loading of the Kernel executable. The main application is
  * contained within the `efi_main` function.
