@@ -24,6 +24,7 @@
 #include "include/syscall_init.h"
 #include "include/syscall.h"
 #include "include/syscall_numbers.h"
+#include "include/gdt.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -35,7 +36,8 @@ static void keyboard_flush(void);
 
 typedef enum {
 	DEMO_ECHO = 1,
-	DEMO_SCHED = 2
+	DEMO_SCHED = 2,
+	DEMO_USERMODE = 3
 } demo_mode_t;
 
 static demo_mode_t select_demo(void);
@@ -75,42 +77,16 @@ static inline uint8_t inb(uint16_t port) {
 	return value;
 }
 
-/* Clone the firmware GDT into kernel-owned memory so it remains mapped post-CR3 switch. */
-struct __attribute__((packed)) gdtr {
-	uint16_t limit;
-	uint64_t base;
-};
 
-static uint64_t gdt_shadow[8] __attribute__((aligned(16)));
+
 static uintptr_t g_kernel_pml4 = 0;
 
 extern uintptr_t kernel_start;  /* from linker script */
 extern uintptr_t kernel_end;
 
-static void gdt_clone_and_load(void) {
-	struct gdtr old_gdtr;
-	__asm__ volatile("sgdt %0" : "=m"(old_gdtr));
 
-	uint16_t bytes = old_gdtr.limit + 1;
-	if (bytes > sizeof(gdt_shadow)) {
-		bytes = sizeof(gdt_shadow);
-	}
-	memcpy((void*)gdt_shadow, (const void*)old_gdtr.base, bytes);
 
-	struct gdtr new_gdtr = {
-		.limit = bytes - 1,
-		.base = (uint64_t)gdt_shadow,
-	};
-	__asm__ volatile("lgdt %0" : : "m"(new_gdtr));
-}
 
-static void gdt_reload_high(void) {
-	struct gdtr new_gdtr = {
-		.limit = (uint16_t)(sizeof(gdt_shadow) - 1),
-		.base = (uint64_t)gdt_shadow + KERNEL_VIRT_BASE,
-	};
-	__asm__ volatile("lgdt %0" : : "m"(new_gdtr));
-}
 
 /**
  * @brief Write text to the framebuffer
@@ -139,8 +115,7 @@ void kernel_main(Boot_Info* boot_info)
 	/* Initialize paging with identity mapping (phys == virt) */
 	paging_init(0);
 
-	/* Ensure GDT resides in kernel-owned, mapped memory before switching CR3 */
-	gdt_clone_and_load();
+	gdt_init();
 	
 	/* Install IDT and register handlers BEFORE CR3 switch (before any page faults can occur) */
 	idt_install();
@@ -201,7 +176,7 @@ void kernel_main(Boot_Info* boot_info)
 static void kernel_main_stage2(Boot_Info* boot_info)
 {
 	/* Reload descriptor tables to their higher-half aliases before dropping identity mappings. */
-	gdt_reload_high();
+	gdt_init();
 	idt_reload_high();
 	/* Keep the identity mapping for now to avoid early faults; we already run from higher half. */
 
@@ -272,7 +247,13 @@ static demo_mode_t select_demo(void) {
 		char c = keyboard_getchar();
 		if (c == '1') {
 			return DEMO_ECHO;
-		} else if (c == '2') {
+		} 
+
+		else if (c == '3') {
+			return DEMO_USERMODE;
+		}
+		
+		else if (c == '2') {
 			return DEMO_SCHED;
 		}
 	}
@@ -365,13 +346,23 @@ static void menu_thread(void) {
 		vga_write("Select demo:\n");
 		vga_write("  1) Keyboard echo\n");
 		vga_write("  2) Scheduler threads (ESC to stop)\n");
-		vga_write("Press 1 or 2...\n");
+		vga_write("  3) Jump to User Mode (Ring 3 Test)\n");
+		vga_write("Press 1 or 2 or 3...\n");
 
 		demo_mode_t mode = select_demo();
 
 		if (mode == DEMO_SCHED) {
 			run_scheduler_demo();
-		} else {
+		
+		} 
+
+		else if (mode == DEMO_USERMODE) {
+			vga_write("Jumping to User Mode demo...\n");
+			uart_puts("Jumping to User Mode demo...\n");
+			start_user_demo();
+		}
+		
+		else {
 			run_echo_demo();
 		}
 
@@ -384,3 +375,35 @@ static void keyboard_flush(void) {
 		/* discard */
 	}
 }
+
+
+void user_code_entry() {
+    // פקודה שאסורה ב-Ring 3. אם אנחנו באמת שם, זה יגרום ל-GPF (שגיאה 13).
+    __asm__ volatile("cli"); 
+
+    while(1) {
+        __asm__ volatile("pause");
+    }
+}
+
+void start_user_demo() {
+    static uint8_t user_stack[8192] __attribute__((aligned(4096)));
+    uint64_t user_stack_bottom = (uint64_t)user_stack;
+    uint64_t user_stack_top = user_stack_bottom + sizeof(user_stack);
+
+    // פתיחת הרשאות ל-Stack (מכסים 2 דפים לביטחון)
+    paging_set_user_bit(user_stack_bottom, 1);
+    paging_set_user_bit(user_stack_bottom + 4096, 1);
+
+    // פתיחת הרשאות לקוד
+    // בגלל שזה בתוך הקרנל, אנחנו פותחים את הביט לדף שבו הפונקציה נמצאת
+    paging_set_user_bit((uintptr_t)user_code_entry, 1);
+    
+    // אם הפונקציה ארוכה, כדאי לפתוח גם את הדף הבא
+    paging_set_user_bit((uintptr_t)user_code_entry + 4096, 1);
+
+    vga_write("Paging updated. Jumping to Ring 3...\n");
+    jump_to_user((uint64_t)user_code_entry, user_stack_top);
+}
+
+

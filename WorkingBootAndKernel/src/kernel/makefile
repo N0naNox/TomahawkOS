@@ -49,7 +49,8 @@ NASM_SOURCES := ${SRC_DIR}/entry.asm \
 	${SRC_DIR}/hal_port_io_asm.asm \
 	${SRC_DIR}/idt_asm.asm \
 	${SRC_DIR}/switch.asm \
-	${SRC_DIR}/syscall_entry.asm
+	${SRC_DIR}/syscall_entry.asm \
+	${SRC_DIR}/gdt_asm.asm
 
 C_SOURCES  :=              \
 	${SRC_DIR}/hal_port_io.c \
@@ -70,7 +71,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/string.c   \
 	${SRC_DIR}/vga.c	\
 	${SRC_DIR}/syscall_init.c \
-	${SRC_DIR}/syscall.c
+	${SRC_DIR}/syscall.c   \
+	${SRC_DIR}/gdt.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})

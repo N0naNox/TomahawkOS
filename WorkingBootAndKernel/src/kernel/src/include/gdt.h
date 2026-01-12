@@ -1,0 +1,31 @@
+#ifndef GDT_H
+#define GDT_H
+
+#include <stdint.h>
+
+// Define segment selectors (offsets into the GDT)
+#define KERN_CODE_SEL 0x08
+#define KERN_DATA_SEL 0x10
+#define USER_CODE_SEL 0x18
+#define USER_DATA_SEL 0x20
+#define TSS_SEL       0x28
+#define KERNEL_VIRT_BASE 0xFFFFFFFF80000000ULL
+
+
+struct tss_entry {
+    uint32_t reserved0;
+    uint64_t rsp0;      // ה-Stack שהמעבד יטען במעבר ל-Ring 0
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist[7];    // Interrupt Stack Table (אופציונלי)
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iopb_offset;
+} __attribute__((packed));
+
+
+void gdt_init(void);
+void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
+
+#endif

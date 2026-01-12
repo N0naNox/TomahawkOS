@@ -118,6 +118,26 @@ void unregister_interrupt_handler(int n) {
     if (n >= 0 && n < IDT_ENTRIES) interrupt_handlers[n] = 0;
 }
 
+
+static void gpf_handler(regs_t* r) {
+    uart_puts("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+    uart_puts("EXCEPTION: GENERAL PROTECTION FAULT (13)\n");
+    uart_puts("WE ARE OFFICIALLY IN USER MODE!\n");
+    uart_puts("Error Code: ");
+    uart_putu(r->err_code);
+    uart_puts("\nRIP: ");
+    uart_putu(r->rip);  // הכתובת המדויקת שגרמה לשגיאה
+    uart_puts("\nCS: ");
+    uart_putu(r->cs);   // כאן תוכל לראות אם זה קרה ב-Ring 3 (ערך 0x1B או 0x23)
+    uart_puts("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+
+    // אנחנו לא יכולים להמשיך מ-GPF בדרך כלל, אז עוצרים
+    while(1) {
+        __asm__ volatile("hlt");
+    }
+}
+
+
 /* Retrieve last interrupt log; returns 1 if new data was read */
 int idt_read_last_int(uint64_t* int_no, uint64_t* err_code, uint64_t* seq_out) {
     static uint64_t last_seq = 0;
@@ -174,6 +194,10 @@ void idt_install(void) {
 
     /* Register page fault handler wrapper */
     register_interrupt_handler(14, page_fault_wrapper);
+
+
+    /* הוסף את זה: רישום הטיפול בשגיאת הגנה כללית */
+    register_interrupt_handler(13, gpf_handler);
 
     /* Remap PIC and install IRQs 32..47 */
     pic_remap();
