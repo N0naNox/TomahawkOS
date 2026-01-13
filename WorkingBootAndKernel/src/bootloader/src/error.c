@@ -1,8 +1,5 @@
 /**
- * @file error.c
- * @author ajxs
- * @date Aug 2019
- * @brief Functionality for printing error messages.
+ * Functionality for printing error messages.
  * Contains functionality for printing error messages that occur within the
  * application and assisting with error handling.
  */

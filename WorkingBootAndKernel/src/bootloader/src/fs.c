@@ -1,8 +1,5 @@
 /**
- * @file fs.c
- * @author ajxs
- * @date Aug 2019
- * @brief Filesystem functionality.
+ * Filesystem functionality.
  * Contains functionality for interacting with the filesystem via EFI services.
  */
 
