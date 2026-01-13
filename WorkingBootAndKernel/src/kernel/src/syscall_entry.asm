@@ -2,11 +2,6 @@ extern syscall_handler_c
 global syscall_entry
 
 syscall_entry:
-
-    mov dx, 0x3F8
-    mov al, '!'
-    out dx, al
-
     swapgs          ; החלפת ה-GS לגרסת הקרנל (כדי להגיע למחסנית הקרנל/TSS)
     mov [gs:0x10], rsp ; שמירת מחסנית המשתמש (נניח שב-offset 0x10 ב-GS נמצא ה-scratch)
     mov rsp, [gs:0x00] ; טעינת מחסנית הקרנל
@@ -27,9 +22,6 @@ syscall_entry:
     mov rsi, rdi    ; מעבירים את ה-arg1 (המחרוזת) ל-RSI
     mov rdi, rax    ; מעבירים את מספר הסיסקול ל-RDI
 
-    mov dx, 0x3F8
-    mov al, '!'
-    out dx, al
 
     call syscall_handler_c
 
@@ -43,14 +35,7 @@ syscall_entry:
     
     mov rsp, [gs:0x10] ; חזרה למחסנית המשתמש
 
-    mov dx, 0x3F8
-    mov al, '!'
-    out dx, al
-
     swapgs
 
-    mov dx, 0x3F8
-    mov al, '!'
-    out dx, al
 
     sysretq         ; חזרה ל-User Mode!
