@@ -32,6 +32,7 @@ static uintptr_t g_phys_map_offset = 0;
 
 /* Higher-half base for the kernel mapping (virt alias of the physical kernel). */
 #define KERNEL_VIRT_BASE 0xFFFFFFFF80000000ULL
+#define PAGE_USER (1ULL << 2)
 
 
 
@@ -301,4 +302,45 @@ uintptr_t paging_setup_kernel_pml4(void) {
 
     uart_puts("paging: kernel pml4 ready\n");
     return pml4;
+}
+
+
+
+void paging_set_user_bit(uintptr_t virt_addr, int enable) {
+    // השגנו את ה-PML4 הנוכחי מ-CR3
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    uint64_t* pml4 = (uint64_t*)(cr3 & ~0xFFFULL);
+
+    // פירוק הכתובת הוירטואלית לאינדקסים
+    uint64_t pml4_idx = (virt_addr >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt_addr >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt_addr >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt_addr >> 12) & 0x1FF;
+
+    // PML4 -> PDPT
+    if (!(pml4[pml4_idx] & 1)) return; // דף לא קיים
+    pml4[pml4_idx] |= PAGE_USER;
+    uint64_t* pdpt = (uint64_t*)(pml4[pml4_idx] & ~0xFFFULL);
+
+    // PDPT -> PD
+    if (!(pdpt[pdpt_idx] & 1)) return;
+    pdpt[pdpt_idx] |= PAGE_USER;
+    uint64_t* pd = (uint64_t*)(pdpt[pdpt_idx] & ~0xFFFULL);
+
+    // PD -> PT
+    if (!(pd[pd_idx] & 1)) return;
+    pd[pd_idx] |= PAGE_USER;
+    
+    // אם זה דף גדול (2MB), עצרנו כאן
+    if (pd[pd_idx] & (1ULL << 7)) return;
+
+    uint64_t* pt = (uint64_t*)(pd[pd_idx] & ~0xFFFULL);
+
+    // PT -> Page
+    if (!(pt[pt_idx] & 1)) return;
+    pt[pt_idx] |= PAGE_USER;
+
+    // רענון ה-TLB כדי שהשינוי ייקלט
+    __asm__ volatile("invlpg (%0)" : : "r"(virt_addr) : "memory");
 }

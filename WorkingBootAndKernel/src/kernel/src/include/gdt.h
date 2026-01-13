@@ -1,10 +1,32 @@
-#pragma once
+#ifndef GDT_H
+#define GDT_H
+
 #include <stdint.h>
 
-void gdt_init(void);
+// Define segment selectors (offsets into the GDT)
+// gdt.h
+#define KERN_CODE_SEL 0x08
+#define KERN_DATA_SEL 0x10
+#define USER_DATA_SEL 0x18  // אינדקס 3 - חייב להיות לפני הקוד עבור sysret
+#define USER_CODE_SEL 0x20  // אינדקס 4
+#define TSS_SEL       0x28  // אינדקס 5
+#define KERNEL_VIRT_BASE 0xFFFFFFFF80000000ULL
 
-/* Segment selectors */
-#define KERNEL_CS 0x08
-#define KERNEL_DS 0x10
-#define USER_DS   0x23
-#define USER_CS   0x1B
+
+struct tss_entry {
+    uint32_t reserved0;
+    uint64_t rsp0;      // ה-Stack שהמעבד יטען במעבר ל-Ring 0
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist[7];    // Interrupt Stack Table (אופציונלי)
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iopb_offset;
+} __attribute__((packed));
+
+
+void gdt_init(void);
+void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
+
+#endif
