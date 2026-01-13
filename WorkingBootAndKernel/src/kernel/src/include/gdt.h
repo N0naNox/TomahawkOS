@@ -4,11 +4,12 @@
 #include <stdint.h>
 
 // Define segment selectors (offsets into the GDT)
+// gdt.h
 #define KERN_CODE_SEL 0x08
 #define KERN_DATA_SEL 0x10
-#define USER_CODE_SEL 0x18
-#define USER_DATA_SEL 0x20
-#define TSS_SEL       0x28
+#define USER_DATA_SEL 0x18  // אינדקס 3 - חייב להיות לפני הקוד עבור sysret
+#define USER_CODE_SEL 0x20  // אינדקס 4
+#define TSS_SEL       0x28  // אינדקס 5
 #define KERNEL_VIRT_BASE 0xFFFFFFFF80000000ULL
 
 

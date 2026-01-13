@@ -2,15 +2,15 @@
 #include "scheduler.h"
 #include "syscall_numbers.h"
 
-uint64_t syscall_dispatch(uint64_t num)
-{
-    uart_puts("[kernel] syscall invoked!\n");
-    
-    switch (num) {
-        case SYSCALL_YIELD:
-            scheduler_yield();
-            return 0;
-        default:
-            return (uint64_t)-1;
+void syscall_handler_c(uint64_t syscall_num, uint64_t arg1) {
+
+    vga_write("!!!!SYSCALL PRINT!!!!");
+    uart_puts("!!!!SYSCALL PRINT!!!!");
+
+
+    if (syscall_num == 1) { // נניח ש-1 זה PRINT
+        vga_write((const char*)arg1);
+        uart_puts("Syscall Print: ");
+        uart_puts((const char*)arg1);
     }
 }

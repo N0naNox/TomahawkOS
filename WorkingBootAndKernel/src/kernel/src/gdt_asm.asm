@@ -27,8 +27,8 @@ jump_to_user:
 
     cli               ; חובה לבטל אינטררפטים לפני החלפת סגמנטים
 
-    ; טעינת סגמנטים של User Mode לרגיסטרי הנתונים
-    mov ax, 0x23      ; User Data Selector (0x20 | 3)
+    ; טעינת סגמנטים של User Mode (אינדקס 3 + RPL 3 = 0x1B)
+    mov ax, 0x1B      ; <--- שונה מ-0x23 ל-0x1B
     mov ds, ax
     mov es, ax
     mov fs, ax
@@ -36,11 +36,11 @@ jump_to_user:
     ; הערה: SS ייטען אוטומטית על ידי ה-IRETQ מהמחסנית
 
     ; הכנת ה-Stack Frame עבור IRETQ
-    push 0x23           ; SS (User Data)
+    push 0x1B           ; SS (User Data: 0x18 | 3) <--- שונה מ-0x23 ל-0x1B
     push rsi            ; RSP (User Stack)
-    push 0x202          ; RFLAGS (Interrupts enabled)
-    push 0x1B           ; CS (User Code: 0x18 | 3)
-    push rdi            ; RIP (Entry Point)
+    push 0x202          ; RFLAGS
+    push 0x23           ; CS (User Code: 0x20 | 3) <--- שונה מ-0x1B ל-0x23
+    push rdi          ; RIP (Entry Point)
 
     ; ניקוי רגיסטרים כדי שהמשתמש לא יראה "שאריות" מהקרנל
     xor rax, rax

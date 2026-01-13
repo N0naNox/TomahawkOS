@@ -53,50 +53,28 @@ void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_
 
 
 void gdt_init() {
-    // 0. Null Descriptor (חובה)
-    gdt_set_gate(0, 0, 0, 0, 0);
-
-    // 1. Kernel Code: Access 0x9A (Present, Ring 0, Exec, Readable)
-    // Granularity 0xAF: 64-bit mode flag (L bit)
-    gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xAF);
-
-    // 2. Kernel Data: Access 0x92 (Present, Ring 0, Read/Write)
-    gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF);
-
-    // 3. User Code: Access 0xFA (Present, Ring 3, Exec, Readable)
-    // שימו לב ל-0xFA - ה-A אומר Ring 3
-    gdt_set_gate(3, 0, 0xFFFFFFFF, 0xFA, 0xAF);
-
-    // 4. User Data: Access 0xF2 (Present, Ring 3, Read/Write)
-    gdt_set_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF);
-
-
+    gdt_set_gate(0, 0, 0, 0, 0);                // 0: Null
+    gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xAF); // 1: Kernel Code (0x08)
+    gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF); // 2: Kernel Data (0x10)
     
+    // הסדר כאן קריטי ל-sysret!
+    gdt_set_gate(3, 0, 0xFFFFFFFF, 0xF2, 0xCF); // 3: User Data (0x18 | 3 = 0x1B)
+    gdt_set_gate(4, 0, 0xFFFFFFFF, 0xFA, 0xAF); // 4: User Code (0x20 | 3 = 0x23)
+
+    // TSS עובר לאינדקס 5
     memset(&g_tss, 0, sizeof(g_tss));
-    g_tss.iopb_offset = sizeof(g_tss);
 
-    // נגדיר את ה-RSP0 ל-Stack הנוכחי של הקרנל (זמנית)
-    extern char stack_top; // ה-Stack שמוגדר ב-linker script
+    extern char stack_top; // מוגדר ב-linker script
+
     g_tss.rsp0 = (uint64_t)&stack_top + KERNEL_VIRT_BASE;
-
     write_tss(5, (uint64_t)&g_tss, sizeof(g_tss) - 1);
 
-
-    // 5+6. TSS (כאן זה מורכב יותר כי TSS ב-64 ביט תופס 16 בתים)
-    // נכון לעכשיו, בוא נטען את ה-GDT בלי TSS רק כדי לראות שהמערכת יציבה
-    
     g_gdtr.limit = (sizeof(struct gdt_entry) * 7) - 1;
     g_gdtr.base  = (uint64_t)&gdt;
-
-    // טעינת ה-GDT החדש
     __asm__ volatile("lgdt %0" : : "m"(g_gdtr));
-
-
-
-    // 8. פקודת הקסם: טעינת ה-TSS לתוך המעבד
-    // 0x28 הוא ה-Selector של ה-TSS (אינדקס 5 * 8 בתים)
+    
+    // טעינת ה-TSS מאינדקס 5 (5 * 8 = 0x28)
     __asm__ volatile("ltr %%ax" : : "a"(0x28));
     
-    // ב-64 ביט צריך לעשות "Far Jump" או Reload ל-CS כדי שהשינוי יתפוס
     gdt_reload_segments(); 
 }

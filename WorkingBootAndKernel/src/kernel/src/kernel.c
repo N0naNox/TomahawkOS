@@ -378,8 +378,14 @@ static void keyboard_flush(void) {
 
 
 void user_code_entry() {
-    // פקודה שאסורה ב-Ring 3. אם אנחנו באמת שם, זה יגרום ל-GPF (שגיאה 13).
-    __asm__ volatile("cli"); 
+    const char* hello = "Hello from User Mode via Syscall!\n";
+
+    __asm__ volatile(
+        "mov $1, %%rax\n"     // מספר הסיסקול
+        "mov %0, %%rdi\n"     // הארגומנט (המחרוזת)
+        "syscall\n"
+        : : "r"(hello) : "rax", "rdi", "rcx", "r11"
+    );
 
     while(1) {
         __asm__ volatile("pause");
