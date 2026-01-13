@@ -378,19 +378,22 @@ static void keyboard_flush(void) {
 
 
 void user_code_entry() {
-    const char* hello = "Hello from User Mode via Syscall!\n";
-
-    __asm__ volatile(
-        "mov $1, %%rax\n"     // מספר הסיסקול
-        "mov %0, %%rdi\n"     // הארגומנט (המחרוזת)
-        "syscall\n"
-        : : "r"(hello) : "rax", "rdi", "rcx", "r11"
-    );
-
     while(1) {
-        __asm__ volatile("pause");
+        // הדפסה
+        __asm__ volatile(
+            "mov $1, %%rax; mov %0, %%rdi; syscall" 
+            : : "r"("User is yielding...\n") : "rax", "rdi", "rcx", "r11"
+        );
+
+        // קריאה ל-Yield
+        __asm__ volatile(
+            "mov $3, %%rax; syscall" 
+            : : : "rax", "rcx", "r11"
+        );
     }
 }
+
+
 
 void start_user_demo() {
     static uint8_t user_stack[8192] __attribute__((aligned(4096)));

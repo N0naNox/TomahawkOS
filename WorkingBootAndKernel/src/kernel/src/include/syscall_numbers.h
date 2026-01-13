@@ -1,3 +1,4 @@
 #pragma once
 
-#define SYSCALL_YIELD 1
+#define SYSCALL_TEST 1
+#define SYS_YIELD 2
