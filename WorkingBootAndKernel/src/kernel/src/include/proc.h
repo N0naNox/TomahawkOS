@@ -53,6 +53,12 @@ typedef struct pcb {
 pcb_t* create_process(const char* name, void (*entry)(void));
 tcb_t* create_thread(pcb_t* proc, void (*entry)(void));
 
+/* Fork current process with COW (returns child PID or 0 in child, -1 on error) */
+int fork_process(void);
+
+/* Get current process */
+pcb_t* get_current_process(void);
+
 /* allocate kernel stack */
 void* alloc_kernel_stack(void);
 

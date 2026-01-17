@@ -25,6 +25,7 @@ static inline uint64_t page_offset(uint64_t va) { return va & 0xFFF; }
 #define PTE_DIRTY      (1ULL << 6)
 #define PTE_PS         (1ULL << 7)   /* Page Size (for PD/PDPT) */
 #define PTE_GLOBAL     (1ULL << 8)
+#define PTE_COW        (1ULL << 9)   /* Copy-On-Write (OS-specific bit) */
 #define PTE_NO_EXECUTE (1ULL << 63)  /* NX bit (if supported) */
 
 /* Mask to extract physical address portion from an entry */
@@ -67,5 +68,27 @@ void paging_free_pml4(uintptr_t pml4_phys);
 /* Set up kernel PML4 with identity mappings for kernel code, early I/O, and framebuffer.
    Returns physical address of kernel PML4, or 0 on failure. */
 uintptr_t paging_setup_kernel_pml4(void);
+
+/* Get the PTE for a virtual address (returns pointer to entry or NULL if not mapped) */
+uint64_t* paging_get_pte(uintptr_t pml4_phys, uint64_t vaddr);
+
+/* Get PTE flags for a virtual address (0 if not mapped) */
+uint64_t paging_get_flags(uintptr_t pml4_phys, uint64_t vaddr);
+
+/* Set/clear specific flags for a mapped page */
+int paging_set_flags(uintptr_t pml4_phys, uint64_t vaddr, uint64_t flags);
+int paging_clear_flags(uintptr_t pml4_phys, uint64_t vaddr, uint64_t flags);
+
+/* Clone page tables with COW (Copy-On-Write) mode.
+ * Copies page table structure, marks pages as read-only and COW,
+ * increments reference counts for shared physical pages.
+ * Returns new PML4 physical address or 0 on failure. */
+uintptr_t paging_clone_cow(uintptr_t src_pml4_phys);
+
+/* Mark a page range as read-only and COW */
+int paging_mark_cow(uintptr_t pml4_phys, uint64_t vaddr, size_t n_pages);
+
+/* Handle COW page fault: copy page if shared, or just mark writable if not */
+int paging_handle_cow_fault(uintptr_t pml4_phys, uint64_t vaddr);
 
 #endif /* PAGING_H */

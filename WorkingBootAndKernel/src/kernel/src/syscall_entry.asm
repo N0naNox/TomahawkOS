@@ -25,6 +25,8 @@ syscall_entry:
 
     call syscall_handler_c
 
+    ; RAX now contains return value - don't touch it!
+    
     ; שחזור
     pop r10
     pop rdx

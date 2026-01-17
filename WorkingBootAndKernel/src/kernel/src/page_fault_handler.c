@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "paging.h"
 #include "frame_alloc.h"
+#include "refcount.h"
 
 /*
 Error code bits:
@@ -29,6 +30,33 @@ int page_fault_handler(uint64_t error_code, uint64_t faulting_address)
     uart_puts("Error code:       0x"); uart_puthex(error_code); uart_putchar('\n');
 
     decode_error(error_code);
+
+    /* Check if this is a write fault on a present page (potential COW) */
+    if ((error_code & PF_CAUSE_PRESENT) && (error_code & PF_CAUSE_WRITE)) {
+        uart_puts("Write fault on present page - checking for COW...\n");
+        
+        uintptr_t pml4_phys = paging_get_current_cr3();
+        uint64_t flags = paging_get_flags(pml4_phys, faulting_address);
+        
+        if (flags & PTE_COW) {
+            uart_puts("COW page detected - handling copy-on-write...\n");
+            int r = paging_handle_cow_fault(pml4_phys, faulting_address);
+            
+            if (r == 0) {
+                uart_puts("COW fault resolved successfully.\n");
+                return 0;
+            }
+            
+            uart_puts("COW fault handler FAILED!\n");
+            uart_puts("FATAL: System halted.\n");
+            while (1) { __asm__("hlt"); }
+        }
+        
+        /* Not a COW page - protection violation */
+        uart_puts("Protection fault on non-COW page!\n");
+        uart_puts("FATAL: System halted.\n");
+        while (1) { __asm__("hlt"); }
+    }
 
     // If the page was not present – handle demand paging
     if ((error_code & PF_CAUSE_PRESENT) == 0)

@@ -2,8 +2,10 @@
 #include "string.h"
 #include "mm.h"
 #include "signal.h"
+#include "paging.h"
 #include <stdint.h>
 #include "include/scheduler.h"
+#include <uart.h>
 
 /* Kernel stack size per thread */
 #define KERNEL_STACK_SIZE (16 * 1024)
@@ -94,4 +96,98 @@ pcb_t* create_process(const char* name, void (*entry)(void)) {
     p->next = NULL;
 
     return p;
+}
+
+/* Get current process (from current thread) */
+pcb_t* get_current_process(void) {
+    tcb_t* current = scheduler_current();
+    if (!current) return NULL;
+    return current->parent;
+}
+
+/* Fork current process with COW */
+int fork_process(void) {
+    pcb_t* parent = get_current_process();
+    if (!parent) {
+        uart_puts("fork: no current process\n");
+        return -1;
+    }
+    
+    uart_puts("fork: cloning process ");
+    uart_putu(parent->pid);
+    uart_puts("\n");
+    
+    /* Create new PCB */
+    pcb_t* child = (pcb_t*)zalloc(sizeof(pcb_t));
+    if (!child) {
+        uart_puts("fork: failed to allocate PCB\n");
+        return -1;
+    }
+    
+    child->pid = next_pid++;
+    child->parent = parent;
+    child->exit_code = 0;
+    
+    /* Copy signal handlers (but not pending signals) */
+    memcpy(&child->signals, &parent->signals, sizeof(signal_struct_t));
+    child->signals.pending = 0;  /* Child starts with no pending signals */
+    
+    /* Clone address space with COW */
+    if (!parent->mm || !parent->mm->pml4_phys) {
+        uart_puts("fork: parent has no address space\n");
+        return -1;
+    }
+    
+    child->mm = (mm_struct*)zalloc(sizeof(mm_struct));
+    if (!child->mm) {
+        uart_puts("fork: failed to allocate mm_struct\n");
+        return -1;
+    }
+    
+    child->mm->pml4_phys = paging_clone_cow(parent->mm->pml4_phys);
+    if (!child->mm->pml4_phys) {
+        uart_puts("fork: failed to clone page tables\n");
+        return -1;
+    }
+    
+    /* Clone main thread */
+    tcb_t* parent_thread = scheduler_current();
+    if (!parent_thread) {
+        uart_puts("fork: no current thread\n");
+        return -1;
+    }
+    
+    tcb_t* child_thread = (tcb_t*)zalloc(sizeof(tcb_t));
+    if (!child_thread) {
+        uart_puts("fork: failed to allocate TCB\n");
+        return -1;
+    }
+    
+    child_thread->tid = next_tid++;
+    child_thread->state = THREAD_READY;
+    child_thread->parent = child;
+    
+    /* Copy context from parent */
+    memcpy(&child_thread->context, &parent_thread->context, sizeof(cpu_context_t));
+    
+    /* Allocate kernel stack for child */
+    child_thread->kernel_stack = alloc_kernel_stack();
+    if (!child_thread->kernel_stack) {
+        uart_puts("fork: failed to allocate kernel stack\n");
+        return -1;
+    }
+    
+    child->main_thread = child_thread;
+    child->threads = child_thread;
+    child->next = NULL;
+    
+    /* Add child thread to scheduler */
+    scheduler_add_thread(child_thread);
+    
+    uart_puts("fork: created child process ");
+    uart_putu(child->pid);
+    uart_puts("\n");
+    
+    /* Return child PID to parent, 0 to child (will be set when child runs) */
+    return (int)child->pid;
 }

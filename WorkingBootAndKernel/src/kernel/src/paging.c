@@ -26,6 +26,7 @@
 /* Include header */
 #include "paging.h"
 #include "frame_alloc.h"
+#include "refcount.h"
 
 /* phys->virt mapping offset (virt = phys + phys_map_offset) */
 static uintptr_t g_phys_map_offset = 0;
@@ -343,4 +344,249 @@ void paging_set_user_bit(uintptr_t virt_addr, int enable) {
 
     // רענון ה-TLB כדי שהשינוי ייקלט
     __asm__ volatile("invlpg (%0)" : : "r"(virt_addr) : "memory");
+}
+
+/* Get the PTE pointer for a virtual address */
+uint64_t* paging_get_pte(uintptr_t pml4_phys, uint64_t vaddr) {
+    if (!pml4_phys) return NULL;
+
+    uint64_t i4 = pml4_index(vaddr);
+    uint64_t i3 = pdpt_index(vaddr);
+    uint64_t i2 = pd_index(vaddr);
+    uint64_t i1 = pt_index(vaddr);
+
+    uint64_t ent4 = read_entry(pml4_phys, i4);
+    if (!(ent4 & PTE_PRESENT)) return NULL;
+    uintptr_t pdpt = (uintptr_t)(ent4 & PTE_ADDR_MASK);
+
+    uint64_t ent3 = read_entry(pdpt, i3);
+    if (!(ent3 & PTE_PRESENT)) return NULL;
+    if (ent3 & PTE_PS) return NULL; /* 1 GiB page - not supported for PTE access */
+    
+    uintptr_t pd = (uintptr_t)(ent3 & PTE_ADDR_MASK);
+    uint64_t ent2 = read_entry(pd, i2);
+    if (!(ent2 & PTE_PRESENT)) return NULL;
+    if (ent2 & PTE_PS) return NULL; /* 2 MiB page - not supported for PTE access */
+
+    uintptr_t pt = (uintptr_t)(ent2 & PTE_ADDR_MASK);
+    uint64_t* pt_virt = (uint64_t*)phys_to_virt(pt);
+    return &pt_virt[i1];
+}
+
+/* Get PTE flags for a virtual address */
+uint64_t paging_get_flags(uintptr_t pml4_phys, uint64_t vaddr) {
+    uint64_t* pte = paging_get_pte(pml4_phys, vaddr);
+    if (!pte) return 0;
+    return *pte & ~PTE_ADDR_MASK;
+}
+
+/* Set flags for a mapped page */
+int paging_set_flags(uintptr_t pml4_phys, uint64_t vaddr, uint64_t flags) {
+    uint64_t* pte = paging_get_pte(pml4_phys, vaddr);
+    if (!pte) return -1;
+    
+    *pte |= (flags & ~PTE_ADDR_MASK);
+    __asm__ volatile("invlpg (%0)" :: "r"(vaddr) : "memory");
+    return 0;
+}
+
+/* Clear flags for a mapped page */
+int paging_clear_flags(uintptr_t pml4_phys, uint64_t vaddr, uint64_t flags) {
+    uint64_t* pte = paging_get_pte(pml4_phys, vaddr);
+    if (!pte) return -1;
+    
+    *pte &= ~(flags & ~PTE_ADDR_MASK);
+    __asm__ volatile("invlpg (%0)" :: "r"(vaddr) : "memory");
+    return 0;
+}
+
+/* Mark a page range as COW (read-only + COW flag) */
+int paging_mark_cow(uintptr_t pml4_phys, uint64_t vaddr, size_t n_pages) {
+    for (size_t i = 0; i < n_pages; i++) {
+        uint64_t page_addr = vaddr + (i << PAGE_SHIFT);
+        uint64_t* pte = paging_get_pte(pml4_phys, page_addr);
+        
+        if (!pte || !(*pte & PTE_PRESENT)) continue;
+        
+        /* Mark as read-only and COW */
+        *pte &= ~PTE_RW;
+        *pte |= PTE_COW;
+        __asm__ volatile("invlpg (%0)" :: "r"(page_addr) : "memory");
+    }
+    return 0;
+}
+
+/* Handle COW page fault */
+int paging_handle_cow_fault(uintptr_t pml4_phys, uint64_t vaddr) {
+    uint64_t page_addr = vaddr & ~(PAGE_SIZE - 1);
+    uint64_t* pte = paging_get_pte(pml4_phys, page_addr);
+    
+    if (!pte || !(*pte & PTE_PRESENT)) {
+        uart_puts("COW fault: page not present\n");
+        return -1;
+    }
+    
+    if (!(*pte & PTE_COW)) {
+        uart_puts("COW fault: not a COW page\n");
+        return -2;
+    }
+    
+    uintptr_t old_phys = *pte & PTE_ADDR_MASK;
+    
+    /* Check if page is shared */
+    if (refcount_is_shared(old_phys)) {
+        /* Page is shared - need to copy */
+        uart_puts("COW: copying shared page\n");
+        
+        /* Allocate new physical page */
+        uintptr_t new_phys = pfa_alloc_frame();
+        if (!new_phys) {
+            uart_puts("COW: out of memory\n");
+            return -3;
+        }
+        
+        /* Copy page content */
+        void* old_virt = phys_to_virt(old_phys);
+        void* new_virt = phys_to_virt(new_phys);
+        uint8_t* src = (uint8_t*)old_virt;
+        uint8_t* dst = (uint8_t*)new_virt;
+        for (size_t i = 0; i < PAGE_SIZE; i++) {
+            dst[i] = src[i];
+        }
+        
+        /* Decrement refcount for old page */
+        uint32_t old_refs = refcount_dec(old_phys);
+        if (old_refs == 0) {
+            /* Old page no longer referenced - free it */
+            pfa_free_frame(old_phys);
+        }
+        
+        /* Set refcount for new page */
+        refcount_set(new_phys, 1);
+        
+        /* Update PTE to point to new page, mark writable, clear COW */
+        *pte = (new_phys & PTE_ADDR_MASK) | (*pte & ~PTE_ADDR_MASK);
+        *pte |= PTE_RW;
+        *pte &= ~PTE_COW;
+        
+        uart_puts("COW: page copied successfully\n");
+    } else {
+        /* Page not shared - just mark as writable */
+        uart_puts("COW: making page writable (not shared)\n");
+        *pte |= PTE_RW;
+        *pte &= ~PTE_COW;
+    }
+    
+    /* Flush TLB */
+    __asm__ volatile("invlpg (%0)" :: "r"(page_addr) : "memory");
+    
+    return 0;
+}
+
+/* Clone page tables with COW */
+uintptr_t paging_clone_cow(uintptr_t src_pml4_phys) {
+    if (!src_pml4_phys) return 0;
+    
+    /* Create new PML4 */
+    uintptr_t dst_pml4_phys = paging_create_pml4();
+    if (!dst_pml4_phys) {
+        uart_puts("COW clone: failed to create PML4\n");
+        return 0;
+    }
+    
+    uint64_t* src_pml4 = (uint64_t*)phys_to_virt(src_pml4_phys);
+    uint64_t* dst_pml4 = (uint64_t*)phys_to_virt(dst_pml4_phys);
+    
+    /* Walk through PML4 entries */
+    for (int i4 = 0; i4 < 512; i4++) {
+        if (!(src_pml4[i4] & PTE_PRESENT)) continue;
+        
+        /* Skip kernel mappings (upper half) - these should be shared directly */
+        if (i4 >= 256) {
+            dst_pml4[i4] = src_pml4[i4];
+            continue;
+        }
+        
+        uintptr_t src_pdpt = src_pml4[i4] & PTE_ADDR_MASK;
+        uintptr_t dst_pdpt = alloc_zeroed_page();
+        if (!dst_pdpt) {
+            uart_puts("COW clone: failed to alloc PDPT\n");
+            return 0;
+        }
+        
+        dst_pml4[i4] = (dst_pdpt & PTE_ADDR_MASK) | (src_pml4[i4] & ~PTE_ADDR_MASK);
+        
+        uint64_t* src_pdpt_ptr = (uint64_t*)phys_to_virt(src_pdpt);
+        uint64_t* dst_pdpt_ptr = (uint64_t*)phys_to_virt(dst_pdpt);
+        
+        /* Walk PDPT entries */
+        for (int i3 = 0; i3 < 512; i3++) {
+            if (!(src_pdpt_ptr[i3] & PTE_PRESENT)) continue;
+            if (src_pdpt_ptr[i3] & PTE_PS) {
+                /* 1GB page - just copy entry */
+                dst_pdpt_ptr[i3] = src_pdpt_ptr[i3];
+                continue;
+            }
+            
+            uintptr_t src_pd = src_pdpt_ptr[i3] & PTE_ADDR_MASK;
+            uintptr_t dst_pd = alloc_zeroed_page();
+            if (!dst_pd) {
+                uart_puts("COW clone: failed to alloc PD\n");
+                return 0;
+            }
+            
+            dst_pdpt_ptr[i3] = (dst_pd & PTE_ADDR_MASK) | (src_pdpt_ptr[i3] & ~PTE_ADDR_MASK);
+            
+            uint64_t* src_pd_ptr = (uint64_t*)phys_to_virt(src_pd);
+            uint64_t* dst_pd_ptr = (uint64_t*)phys_to_virt(dst_pd);
+            
+            /* Walk PD entries */
+            for (int i2 = 0; i2 < 512; i2++) {
+                if (!(src_pd_ptr[i2] & PTE_PRESENT)) continue;
+                if (src_pd_ptr[i2] & PTE_PS) {
+                    /* 2MB page - just copy entry */
+                    dst_pd_ptr[i2] = src_pd_ptr[i2];
+                    continue;
+                }
+                
+                uintptr_t src_pt = src_pd_ptr[i2] & PTE_ADDR_MASK;
+                uintptr_t dst_pt = alloc_zeroed_page();
+                if (!dst_pt) {
+                    uart_puts("COW clone: failed to alloc PT\n");
+                    return 0;
+                }
+                
+                dst_pd_ptr[i2] = (dst_pt & PTE_ADDR_MASK) | (src_pd_ptr[i2] & ~PTE_ADDR_MASK);
+                
+                uint64_t* src_pt_ptr = (uint64_t*)phys_to_virt(src_pt);
+                uint64_t* dst_pt_ptr = (uint64_t*)phys_to_virt(dst_pt);
+                
+                /* Walk PT entries (actual pages) */
+                for (int i1 = 0; i1 < 512; i1++) {
+                    if (!(src_pt_ptr[i1] & PTE_PRESENT)) continue;
+                    
+                    uintptr_t phys = src_pt_ptr[i1] & PTE_ADDR_MASK;
+                    
+                    /* Copy entry to destination */
+                    dst_pt_ptr[i1] = src_pt_ptr[i1];
+                    
+                    /* If page is writable, make it COW in both parent and child */
+                    if (src_pt_ptr[i1] & PTE_RW) {
+                        src_pt_ptr[i1] &= ~PTE_RW;
+                        src_pt_ptr[i1] |= PTE_COW;
+                        
+                        dst_pt_ptr[i1] &= ~PTE_RW;
+                        dst_pt_ptr[i1] |= PTE_COW;
+                        
+                        /* Increment refcount for shared page */
+                        refcount_inc(phys);
+                        refcount_inc(phys); /* Once for each mapping */
+                    }
+                }
+            }
+        }
+    }
+    
+    uart_puts("COW clone: page tables cloned successfully\n");
+    return dst_pml4_phys;
 }
