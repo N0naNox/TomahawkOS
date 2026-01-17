@@ -24,6 +24,12 @@ void syscall_handler_c(uint64_t syscall_num, uint64_t arg1)
             uart_puts("[KERNEL] Process yielded. Scheduling next...\n");
             scheduler_yield();
             return;
+
+        case SYS_EXIT:
+            uart_puts("[KERNEL] Process exiting...\n");
+            scheduler_thread_exit();
+            return;
+
         default:
             break;
     }
