@@ -1,4 +1,5 @@
 #include "include/gdt.h"
+#include <string.h>
 
 // A 64-bit GDT entry (simplified)
 struct gdt_entry {

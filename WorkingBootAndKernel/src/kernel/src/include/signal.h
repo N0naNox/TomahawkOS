@@ -79,6 +79,9 @@ typedef struct signal_struct {
     sigset_t pending;                /* Pending signals bitmask */
     sigset_t blocked;                /* Blocked signals bitmask */
     void* sigstack;                  /* Alternate signal stack (optional) */
+    uint64_t saved_rip;              /* Saved RIP for signal return */
+    uint64_t saved_rsp;              /* Saved RSP for signal return */
+    int in_signal_handler;           /* Flag: currently in signal handler */
 } signal_struct_t;
 
 /* Initialize signal structure with default handlers */
@@ -108,5 +111,22 @@ void signal_queue(signal_struct_t* sig, int signo);
 
 /* Remove a signal from the pending set */
 void signal_dequeue(signal_struct_t* sig, int signo);
+
+/* Forward declaration for PCB */
+struct pcb;
+
+/* Send signal to a process */
+int signal_send(struct pcb* proc, int signo);
+
+/* Check if process has pending signals */
+int signal_has_pending(struct pcb* proc);
+
+/* Deliver pending signals by modifying interrupt frame */
+/* Returns 1 if a signal was delivered, 0 otherwise */
+struct regs;
+int signal_deliver(struct pcb* proc, struct regs* r);
+
+/* Handle signal return from user space */
+int signal_return(struct pcb* proc, struct regs* r);
 
 #endif /* SIGNAL_H */

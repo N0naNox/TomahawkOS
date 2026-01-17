@@ -33,6 +33,9 @@ static void* zalloc(size_t size) {
 static uint64_t next_pid = 1;
 static uint64_t next_tid = 1;
 
+/* Global process list for signal delivery */
+static pcb_t* process_list = NULL;
+
 /* Allocate kernel stack (top pointer) */
 void* alloc_kernel_stack(void) {
     void* stk = kmalloc(KERNEL_STACK_SIZE, 16);
@@ -94,6 +97,10 @@ pcb_t* create_process(const char* name, void (*entry)(void)) {
     p->main_thread = create_thread(p, entry);
     p->threads = p->main_thread;
     p->next = NULL;
+
+    /* Add to global process list */
+    p->next = process_list;
+    process_list = p;
 
     return p;
 }
@@ -184,10 +191,26 @@ int fork_process(void) {
     /* Add child thread to scheduler */
     scheduler_add_thread(child_thread);
     
+    /* Add child to process list */
+    child->next = process_list;
+    process_list = child;
+    
     uart_puts("fork: created child process ");
     uart_putu(child->pid);
     uart_puts("\n");
     
     /* Return child PID to parent, 0 to child (will be set when child runs) */
     return (int)child->pid;
+}
+
+/* Find process by PID */
+pcb_t* find_process_by_pid(uint64_t pid) {
+    pcb_t* p = process_list;
+    while (p) {
+        if (p->pid == pid) {
+            return p;
+        }
+        p = p->next;
+    }
+    return NULL;
 }

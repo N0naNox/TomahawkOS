@@ -5,3 +5,7 @@
 #define SYS_EXIT 3
 #define SYS_FORK 4
 #define SYS_GETPID 5
+#define SYS_SIGNAL 6
+#define SYS_KILL 7
+#define SYS_SIGPROCMASK 8
+#define SYS_SIGRETURN 9

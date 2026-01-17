@@ -34,6 +34,8 @@ static void demo_esc_watcher(void);
 static void menu_thread(void);
 static void idle_thread(void);
 static void keyboard_flush(void);
+static void start_user_demo(void);
+static void user_code_entry(void);
 
 typedef enum {
 	DEMO_ECHO = 1,
@@ -381,7 +383,7 @@ static void keyboard_flush(void) {
 }
 
 
-void user_code_entry() {
+static void user_code_entry(void) {
     while(1) {
         // הדפסה
         __asm__ volatile(
@@ -399,7 +401,7 @@ void user_code_entry() {
 
 
 
-void start_user_demo() {
+static void start_user_demo(void) {
     static uint8_t user_stack[8192] __attribute__((aligned(4096)));
     uint64_t user_stack_bottom = (uint64_t)user_stack;
     uint64_t user_stack_top = user_stack_bottom + sizeof(user_stack);

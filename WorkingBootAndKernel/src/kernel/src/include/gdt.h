@@ -28,5 +28,9 @@ struct tss_entry {
 
 void gdt_init(void);
 void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
+void gdt_reload_segments(void);
+
+/* Jump to user mode (Ring 3) - implemented in gdt_asm.asm */
+void jump_to_user(uint64_t entry_point, uint64_t user_stack);
 
 #endif

@@ -2,6 +2,7 @@
 #include "include/proc.h"
 #include "include/string.h"
 #include "include/idt.h"
+#include "include/signal.h"
 
 /* Basic cooperative round-robin scheduler.
  * - Single global ready queue (singly linked list using t->next)
@@ -133,6 +134,10 @@ void scheduler_tick(regs_t* r) {
 
     tcb_t* next = dequeue_next();
     if (!next) {
+        /* Check for pending signals before returning to same thread */
+        if (current && current->parent) {
+            signal_deliver(current->parent, r);
+        }
         return;
     }
 
@@ -146,6 +151,11 @@ void scheduler_tick(regs_t* r) {
     current = next;
     current->state = THREAD_RUNNING;
     load_regs_from_context(r, &next->context);
+    
+    /* Check for pending signals before returning to user mode */
+    if (current && current->parent) {
+        signal_deliver(current->parent, r);
+    }
 }
 
 void scheduler_thread_exit(void) {

@@ -59,6 +59,9 @@ int fork_process(void);
 /* Get current process */
 pcb_t* get_current_process(void);
 
+/* Find process by PID */
+pcb_t* find_process_by_pid(uint64_t pid);
+
 /* allocate kernel stack */
 void* alloc_kernel_stack(void);
 

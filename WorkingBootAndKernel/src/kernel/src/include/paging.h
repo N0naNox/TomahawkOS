@@ -91,4 +91,7 @@ int paging_mark_cow(uintptr_t pml4_phys, uint64_t vaddr, size_t n_pages);
 /* Handle COW page fault: copy page if shared, or just mark writable if not */
 int paging_handle_cow_fault(uintptr_t pml4_phys, uint64_t vaddr);
 
+/* Set user bit for a virtual address (legacy function) */
+void paging_set_user_bit(uintptr_t virt_addr, int enable);
+
 #endif /* PAGING_H */

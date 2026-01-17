@@ -13,8 +13,8 @@ static size_t g_max_frames = 0;
 /* Reference count array: one uint32_t per frame */
 static uint32_t* g_refcounts = NULL;
 
-/* Static storage for refcounts (supports ~8GB with 4KB pages) */
-#define MAX_REFCOUNT_ENTRIES (2 * 1024 * 1024)  /* 2M frames = 8GB */
+/* Static storage for refcounts (supports ~512MB with 4KB pages) */
+#define MAX_REFCOUNT_ENTRIES (128 * 1024)  /* 128K frames = 512MB */
 static uint32_t g_refcount_storage[MAX_REFCOUNT_ENTRIES];
 
 void refcount_init(size_t max_frames)
