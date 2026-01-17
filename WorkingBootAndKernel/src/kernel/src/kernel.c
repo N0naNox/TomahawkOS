@@ -25,6 +25,7 @@
 #include "include/syscall.h"
 #include "include/syscall_numbers.h"
 #include "include/gdt.h"
+#include "include/refcount.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -111,6 +112,9 @@ void kernel_main(Boot_Info* boot_info)
 	
 	/* Initialize frame allocator from UEFI memory map */
 	frame_alloc_init(boot_info);
+	
+	/* Initialize reference counting for COW (track up to 2M frames = 8GB) */
+	refcount_init(2 * 1024 * 1024);
 	
 	/* Initialize paging with identity mapping (phys == virt) */
 	paging_init(0);

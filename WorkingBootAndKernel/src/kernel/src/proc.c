@@ -1,6 +1,7 @@
 #include "proc.h"
 #include "string.h"
 #include "mm.h"
+#include "signal.h"
 #include <stdint.h>
 #include "include/scheduler.h"
 
@@ -81,6 +82,11 @@ pcb_t* create_process(const char* name, void (*entry)(void)) {
 
     /* Address space */
     p->mm = mm_create();
+
+    /* Initialize signal handling */
+    signal_init(&p->signals);
+    p->parent = NULL;
+    p->exit_code = 0;
 
     /* Main thread */
     p->main_thread = create_thread(p, entry);

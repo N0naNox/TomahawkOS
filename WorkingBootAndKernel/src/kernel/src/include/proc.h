@@ -2,6 +2,7 @@
 #define PROC_H
 
 #include "mm.h"
+#include "signal.h"
 #include <stdint.h>
 
 /* Thread states */
@@ -37,10 +38,15 @@ typedef struct tcb {
 
 typedef struct pcb {
     uint64_t pid;
-    mm_struct* mm;          /* address space info */
+    mm_struct* mm;              /* address space info */
     tcb_t* main_thread;
     tcb_t* threads;
     struct pcb* next;
+    
+    /* Signal handling */
+    signal_struct_t signals;    /* signal handlers, pending, blocked */
+    struct pcb* parent;         /* parent process (for SIGCHLD) */
+    int exit_code;              /* exit status */
 } pcb_t;
 
 /* API */
