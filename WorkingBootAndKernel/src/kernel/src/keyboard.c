@@ -29,11 +29,35 @@ static const char scancode_map[128] = {
     /* rest default 0 */
 };
 
+/* Shutdown the system */
+static void shutdown_system(void) {
+    uart_puts("\n\n=== SYSTEM SHUTDOWN (F12 pressed) ===\n");
+    vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+    vga_write("\n\n  System shutting down...\n");
+    
+    /* Disable interrupts */
+    __asm__ volatile("cli");
+    
+    /* Use QEMU debug exit device to close window */
+    hal_outb(0xf4, 0x10);  /* Exit code 0x10 -> actual exit code (0x10 << 1) | 1 = 33 */
+    
+    /* If QEMU didn't close, halt */
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
 /* IRQ handler called from C via isr_common_handler */
 static void keyboard_irq_handler(regs_t* r) {
     (void)r;
     /* Read scancode */
     uint8_t sc = hal_inb(0x60);
+
+    /* Check for F12 shutdown (scancode 0x58) */
+    if (sc == 0x58) {
+        shutdown_system();
+        return;
+    }
 
     /* Ignore break codes (high bit set) */
     if (sc & 0x80) {

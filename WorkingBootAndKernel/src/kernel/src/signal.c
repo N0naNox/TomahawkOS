@@ -251,3 +251,24 @@ int signal_return(pcb_t* proc, regs_t* r)
     
     return 0;
 }
+/* 
+ * signal_install - Install a signal handler (kernel helper for demos)
+ */
+void signal_install(struct pcb* proc, int signo, uintptr_t handler)
+{
+    if (signo < 1 || signo > MAX_SIGNAL) {
+        return;
+    }
+    
+    if (signo == SIGKILL || signo == SIGSTOP) {
+        /* Cannot override SIGKILL or SIGSTOP */
+        return;
+    }
+    
+    proc->signals.handlers[signo] = (sig_handler_t)handler;
+    uart_puts("signal_install: installed handler for signal ");
+    uart_putu(signo);
+    uart_puts(" at 0x");
+    uart_puthex(handler);
+    uart_puts("\n");
+}

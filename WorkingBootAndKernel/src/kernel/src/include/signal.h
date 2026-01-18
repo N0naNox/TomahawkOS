@@ -118,6 +118,9 @@ struct pcb;
 /* Send signal to a process */
 int signal_send(struct pcb* proc, int signo);
 
+/* Install signal handler for a process (kernel helper) */
+void signal_install(struct pcb* proc, int signo, uintptr_t handler);
+
 /* Check if process has pending signals */
 int signal_has_pending(struct pcb* proc);
 

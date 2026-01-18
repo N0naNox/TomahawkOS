@@ -9,6 +9,7 @@ qemu-system-x86_64 \
 	-serial stdio \
 	-usb \
 	-net none \
-	-vga std
+	-vga std \
+	-device isa-debug-exit,iobase=0xf4,iosize=0x04
 # fallback to legacy target
 # make -C src emu

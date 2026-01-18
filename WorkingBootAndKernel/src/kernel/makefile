@@ -74,7 +74,9 @@ C_SOURCES  :=              \
 	${SRC_DIR}/syscall.c   \
 	${SRC_DIR}/gdt.c \
 	${SRC_DIR}/refcount.c \
-	${SRC_DIR}/signal.c
+	${SRC_DIR}/signal.c \
+	${SRC_DIR}/tests.c \
+	${SRC_DIR}/demos.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})

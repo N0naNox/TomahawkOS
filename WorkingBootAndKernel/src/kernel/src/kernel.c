@@ -26,21 +26,23 @@
 #include "include/syscall_numbers.h"
 #include "include/gdt.h"
 #include "include/refcount.h"
+#include "include/signal.h"
+#include "include/tests.h"
+#include "include/demos.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
 static void demo_thread_b(void);
-static void demo_esc_watcher(void);
+void demo_esc_watcher(void);
 static void menu_thread(void);
 static void idle_thread(void);
 static void keyboard_flush(void);
-static void start_user_demo(void);
-static void user_code_entry(void);
 
 typedef enum {
 	DEMO_ECHO = 1,
 	DEMO_SCHED = 2,
-	DEMO_USERMODE = 3
+	DEMO_COW_SIGNALS = 3,
+	DEMO_TESTS = 4
 } demo_mode_t;
 
 static demo_mode_t select_demo(void);
@@ -48,7 +50,7 @@ static void run_echo_demo(void);
 static void run_scheduler_demo(void);
 static void demo_busywait(void);
 
-static volatile int demo_stop_requested = 0;
+volatile int demo_stop_requested = 0;
 
 /** Whether to draw a test pattern to video output. */
 #define DRAW_TEST_SCREEN 1
@@ -254,13 +256,14 @@ static demo_mode_t select_demo(void) {
 		if (c == '1') {
 			return DEMO_ECHO;
 		} 
-
-		else if (c == '3') {
-			return DEMO_USERMODE;
-		}
-		
 		else if (c == '2') {
 			return DEMO_SCHED;
+		}
+		else if (c == '3') {
+			return DEMO_COW_SIGNALS;
+		}
+		else if (c == '4') {
+			return DEMO_TESTS;
 		}
 	}
 }
@@ -287,7 +290,7 @@ static void demo_thread_b(void) {
 	scheduler_thread_exit();
 }
 
-static void demo_esc_watcher(void) {
+void demo_esc_watcher(void) {
 	while (!demo_stop_requested) {
 		char c = keyboard_getchar();
 		if (c == 27) { /* ESC */
@@ -348,26 +351,33 @@ static void menu_thread(void) {
 		keyboard_flush();
 		/* Clear screen and prompt */
 		vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-		uart_puts("Select demo: 1=echo, 2=scheduler\n");
+		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests\n");
 		vga_write("Select demo:\n");
-		vga_write("  1) Keyboard echo\n");
+		vga_write("  1) Keyboard echo (ESC to stop)\n");
 		vga_write("  2) Scheduler threads (ESC to stop)\n");
-		vga_write("  3) Jump to User Mode (Ring 3 Test)\n");
-		vga_write("Press 1 or 2 or 3...\n");
+		vga_write("  3) COW Fork + Signals (ESC to stop)\n");
+		vga_write("  4) Run Kernel Unit Tests (ESC to stop)\n");
+		vga_write("\n  Press F12 to shutdown\n");
+		vga_write("Press 1-4...\n");
 
 		demo_mode_t mode = select_demo();
 
 		if (mode == DEMO_SCHED) {
 			run_scheduler_demo();
-		
 		} 
-
-		else if (mode == DEMO_USERMODE) {
-			vga_write("Jumping to User Mode demo...\n");
-			uart_puts("Jumping to User Mode demo...\n");
-			start_user_demo();
+		else if (mode == DEMO_COW_SIGNALS) {
+			run_combined_cow_signals_demo();
 		}
-		
+		else if (mode == DEMO_TESTS) {
+			vga_write("Running kernel unit tests...\n");
+			uart_puts("Running kernel unit tests...\n");
+			demo_stop_requested = 0;
+			create_process("esc-watcher", demo_esc_watcher);
+			run_kernel_tests();
+			vga_write("Tests complete. Press ESC to continue...\n");
+			uart_puts("Tests complete. Press ESC to continue...\n");
+			while (!demo_stop_requested) { __asm__ volatile("pause"); }
+		}
 		else {
 			run_echo_demo();
 		}
@@ -381,44 +391,3 @@ static void keyboard_flush(void) {
 		/* discard */
 	}
 }
-
-
-static void user_code_entry(void) {
-    while(1) {
-        // הדפסה
-        __asm__ volatile(
-            "mov $1, %%rax; mov %0, %%rdi; syscall" 
-            : : "r"("User is yielding...\n") : "rax", "rdi", "rcx", "r11"
-        );
-
-        // קריאה ל-Yield
-        __asm__ volatile(
-            "mov $3, %%rax; syscall" 
-            : : : "rax", "rcx", "r11"
-        );
-    }
-}
-
-
-
-static void start_user_demo(void) {
-    static uint8_t user_stack[8192] __attribute__((aligned(4096)));
-    uint64_t user_stack_bottom = (uint64_t)user_stack;
-    uint64_t user_stack_top = user_stack_bottom + sizeof(user_stack);
-
-    // פתיחת הרשאות ל-Stack (מכסים 2 דפים לביטחון)
-    paging_set_user_bit(user_stack_bottom, 1);
-    paging_set_user_bit(user_stack_bottom + 4096, 1);
-
-    // פתיחת הרשאות לקוד
-    // בגלל שזה בתוך הקרנל, אנחנו פותחים את הביט לדף שבו הפונקציה נמצאת
-    paging_set_user_bit((uintptr_t)user_code_entry, 1);
-    
-    // אם הפונקציה ארוכה, כדאי לפתוח גם את הדף הבא
-    paging_set_user_bit((uintptr_t)user_code_entry + 4096, 1);
-
-    vga_write("Paging updated. Jumping to Ring 3...\n");
-    jump_to_user((uint64_t)user_code_entry, user_stack_top);
-}
-
-
