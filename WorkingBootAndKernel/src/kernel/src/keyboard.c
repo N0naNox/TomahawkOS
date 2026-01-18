@@ -93,10 +93,77 @@ void keyboard_init(void) {
 }
 
 char keyboard_getchar(void) {
+    /* Validate buffer indices to prevent corruption */
+    if (kb_head >= sizeof(kb_buf)) {
+        uart_puts("[KEYBOARD] ERROR: kb_head corrupted, resetting buffer\n");
+        kb_head = 0;
+        kb_tail = 0;
+        return 0;
+    }
+    if (kb_tail >= sizeof(kb_buf)) {
+        uart_puts("[KEYBOARD] ERROR: kb_tail corrupted, resetting buffer\n");
+        kb_head = 0;
+        kb_tail = 0;
+        return 0;
+    }
+    
     if (kb_tail == kb_head) return 0;
     char c = kb_buf[kb_tail];
     kb_tail = (kb_tail + 1) & (sizeof(kb_buf)-1);
     return c;
+}
+
+void keyboard_reset_buffer(void) {
+    uart_puts("[KEYBOARD] Resetting buffer: head=");
+    uart_putu(kb_head);
+    uart_puts(" tail=");
+    uart_putu(kb_tail);
+    uart_puts("\n");
+    
+    /* Disable keyboard interrupts while we reset */
+    uint8_t mask = hal_inb(0x21);
+    mask |= (1 << 1); /* Set bit 1 to disable IRQ1 */
+    hal_outb(0x21, mask);
+    
+    /* Drain the keyboard controller hardware buffer */
+    uart_puts("[KEYBOARD] Draining hardware controller...\n");
+    int drained = 0;
+    for (int i = 0; i < 100; i++) {
+        uint8_t status = hal_inb(0x64);
+        if (status & 0x01) {
+            /* Output buffer full - read and discard */
+            uint8_t data = hal_inb(0x60);
+            drained++;
+            uart_puts("[KEYBOARD] Drained hw byte: ");
+            uart_putu(data);
+            uart_puts("\n");
+        } else {
+            break;
+        }
+        /* Small delay */
+        for (volatile int j = 0; j < 1000; j++) {
+            __asm__ volatile("pause");
+        }
+    }
+    uart_puts("[KEYBOARD] Drained ");
+    uart_putu(drained);
+    uart_puts(" bytes from hardware\n");
+    
+    /* Reset software buffer */
+    kb_head = 0;
+    kb_tail = 0;
+    
+    /* Clear the buffer */
+    for (int i = 0; i < sizeof(kb_buf); i++) {
+        kb_buf[i] = 0;
+    }
+    
+    /* Re-enable keyboard interrupts */
+    mask = hal_inb(0x21);
+    mask &= ~(1 << 1); /* Clear bit 1 to enable IRQ1 */
+    hal_outb(0x21, mask);
+    
+    uart_puts("[KEYBOARD] Buffer reset complete\n");
 }
 
 /* Polling fallback: check controller status and echo if data ready. */

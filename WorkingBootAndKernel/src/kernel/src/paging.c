@@ -28,6 +28,9 @@
 #include "frame_alloc.h"
 #include "refcount.h"
 
+/* Kernel boundaries from linker script */
+extern char kernel_start;
+extern char kernel_end;
 /* phys->virt mapping offset (virt = phys + phys_map_offset) */
 static uintptr_t g_phys_map_offset = 0;
 
@@ -244,9 +247,6 @@ uintptr_t paging_get_current_cr3() {
  * NOTE: Assumes identity mapping (virt == phys, phys_map_offset == 0).
  * If you change phys_map_offset, kernel page tables must account for that.
  */
-
-extern uintptr_t kernel_start;  /* from kernel.ld */
-extern uintptr_t kernel_end;    /* from kernel.ld */
 
 #define FRAMEBUFFER_PADDR  0x80000000ULL
 #define FRAMEBUFFER_SIZE   (4 * 1024 * 1024)  /* 4 MiB to be safe */
@@ -567,11 +567,15 @@ uintptr_t paging_clone_cow(uintptr_t src_pml4_phys) {
                     
                     uintptr_t phys = src_pt_ptr[i1] & PTE_ADDR_MASK;
                     
+                    /* Check if this is kernel memory (0x100000 to kernel_end) */
+                    uintptr_t kernel_end_addr = (uintptr_t)&kernel_end;
+                    int is_kernel = (phys >= 0x100000 && phys < kernel_end_addr);
+                    
                     /* Copy entry to destination */
                     dst_pt_ptr[i1] = src_pt_ptr[i1];
                     
-                    /* If page is writable, make it COW in both parent and child */
-                    if (src_pt_ptr[i1] & PTE_RW) {
+                    /* If page is writable AND not kernel memory, make it COW */
+                    if ((src_pt_ptr[i1] & PTE_RW) && !is_kernel) {
                         src_pt_ptr[i1] &= ~PTE_RW;
                         src_pt_ptr[i1] |= PTE_COW;
                         
@@ -581,6 +585,9 @@ uintptr_t paging_clone_cow(uintptr_t src_pml4_phys) {
                         /* Increment refcount for shared page */
                         refcount_inc(phys);
                         refcount_inc(phys); /* Once for each mapping */
+                    } else if (is_kernel) {
+                        /* Kernel pages stay shared and writable - increment refcount once */
+                        refcount_inc(phys);
                     }
                 }
             }

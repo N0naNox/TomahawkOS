@@ -251,20 +251,26 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 }
 
 static demo_mode_t select_demo(void) {
+	uart_puts("[SELECT] Waiting for demo selection (1-4)...\n");
 	while (1) {
 		char c = keyboard_getchar();
 		if (c == '1') {
+			uart_puts("[SELECT] Selected: 1\n");
 			return DEMO_ECHO;
 		} 
 		else if (c == '2') {
+			uart_puts("[SELECT] Selected: 2\n");
 			return DEMO_SCHED;
 		}
 		else if (c == '3') {
+			uart_puts("[SELECT] Selected: 3\n");
 			return DEMO_COW_SIGNALS;
 		}
 		else if (c == '4') {
+			uart_puts("[SELECT] Selected: 4\n");
 			return DEMO_TESTS;
 		}
+		/* Silently ignore all other characters (including garbage) */
 	}
 }
 
@@ -387,7 +393,31 @@ static void menu_thread(void) {
 }
 
 static void keyboard_flush(void) {
-	while (keyboard_getchar()) {
-		/* discard */
+	uart_puts("[FLUSH] Starting keyboard buffer flush\n");
+	
+	/* First, hard reset the buffer to clear any corruption */
+	keyboard_reset_buffer();
+	
+	int total_flushed = 0;
+	/* Flush multiple times to ensure buffer is clear */
+	for (int attempts = 0; attempts < 10; attempts++) {
+		int flushed_this_round = 0;
+		char c;
+		while ((c = keyboard_getchar())) {
+			flushed_this_round++;
+			total_flushed++;
+			uart_puts("[FLUSH] Discarded char: ");
+			uart_putchar(c);
+			uart_puts(" (");
+			uart_putu((unsigned char)c);
+			uart_puts(")\n");
+		}
+		/* Small delay between attempts */
+		for (volatile int i = 0; i < 100000; i++) {
+			__asm__ volatile("pause");
+		}
 	}
+	uart_puts("[FLUSH] Total chars flushed: ");
+	uart_putu(total_flushed);
+	uart_puts("\n");
 }

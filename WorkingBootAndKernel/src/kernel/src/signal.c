@@ -157,6 +157,10 @@ int signal_deliver(pcb_t* proc, regs_t* r)
     /* Get handler for this signal */
     sig_handler_t handler = proc->signals.handlers[signo];
     
+    uart_puts("signal_deliver: handler value = 0x");
+    uart_puthex((uint64_t)handler);
+    uart_puts("\n");
+    
     /* Handle special cases */
     if (handler == SIG_IGN) {
         /* Ignore signal - just dequeue it */

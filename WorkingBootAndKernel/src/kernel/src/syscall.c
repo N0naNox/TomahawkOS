@@ -36,6 +36,15 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_FORK: {
             uart_puts("[KERNEL] fork() called\n");
+            
+            /* Check if we're the newly created child */
+            pcb_t* current = get_current_process();
+            if (current && current->is_fork_child) {
+                current->is_fork_child = 0;  /* Clear flag */
+                uart_puts("[KERNEL] fork() returning 0 (child)\n");
+                return 0;
+            }
+            
             int child_pid = fork_process();
             uart_puts("[KERNEL] fork() returning ");
             uart_putu(child_pid);

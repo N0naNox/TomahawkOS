@@ -188,6 +188,9 @@ int fork_process(void) {
     child->threads = child_thread;
     child->next = NULL;
     
+    /* Mark this child so syscall handler can return 0 to it */
+    child->is_fork_child = 1;
+    
     /* Add child thread to scheduler */
     scheduler_add_thread(child_thread);
     

@@ -12,4 +12,7 @@ void keyboard_init(void);
 char keyboard_getchar(void);
 void keyboard_poll_once(void);
 
+/* Reset keyboard buffer - use when buffer may be corrupted */
+void keyboard_reset_buffer(void);
+
 #endif /* KEYBOARD_H */

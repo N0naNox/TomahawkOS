@@ -47,6 +47,7 @@ typedef struct pcb {
     signal_struct_t signals;    /* signal handlers, pending, blocked */
     struct pcb* parent;         /* parent process (for SIGCHLD) */
     int exit_code;              /* exit status */
+    int is_fork_child;          /* 1 if this is a newly forked child */
 } pcb_t;
 
 /* API */
