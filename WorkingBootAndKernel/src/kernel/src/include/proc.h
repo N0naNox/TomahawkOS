@@ -5,6 +5,8 @@
 #include "signal.h"
 #include <stdint.h>
 
+#define MAX_FILES 32   
+
 /* Thread states */
 typedef enum {
     THREAD_READY,
@@ -42,6 +44,9 @@ typedef struct pcb {
     tcb_t* main_thread;
     tcb_t* threads;
     struct pcb* next;
+
+    struct file* fd_table[MAX_FILES];  /* file descriptors */
+
     
     /* Signal handling */
     signal_struct_t signals;    /* signal handlers, pending, blocked */
