@@ -40,6 +40,11 @@ typedef struct tcb {
 
 typedef struct pcb {
     uint64_t pid;
+
+    uint32_t uid;
+    uint32_t gid;
+    
+
     mm_struct* mm;              /* address space info */
     tcb_t* main_thread;
     tcb_t* threads;

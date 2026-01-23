@@ -1,14 +1,3 @@
-#####################################################################
-#  Copyright (c) 2019, AJXS.
-#  This program is free software; you can redistribute it and/or modify it
-#  under the terms of the GNU General Public License as published by the
-#  Free Software Foundation; either version 3 of the License, or
-#  (at your option) any later version.
-#
-#  Authors:
-#     Anthony <ajxs [at] panoptic.online>
-#####################################################################
-
 .POSIX:
 .DELETE_ON_ERROR:
 MAKEFLAGS += --warn-undefined-variables
@@ -76,7 +65,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/refcount.c \
 	${SRC_DIR}/signal.c \
 	${SRC_DIR}/tests.c \
-	${SRC_DIR}/demos.c
+	${SRC_DIR}/demos.c \
+	${SRC_DIR}/sys_proc.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})
