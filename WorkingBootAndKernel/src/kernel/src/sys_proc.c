@@ -7,7 +7,7 @@
 static bool can_manage_process(pcb_t* source, pcb_t* target) {
     if (!source || !target) return false;
     // חוקי ה-VIP: Root יכול הכל, או שה-UIDs זהים
-    if (source->uid == 0 || source->uid == target->uid) {
+    if (source->uid == ROOT_UID || source->uid == target->uid) {
         return true;
     }
     return false;

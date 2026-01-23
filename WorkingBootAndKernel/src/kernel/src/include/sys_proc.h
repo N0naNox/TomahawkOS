@@ -5,6 +5,8 @@
 #include "signal.h"
 #include "uart.h"
 
+#define ROOT_UID 0
+
 uint64_t sys_kill(uint64_t target_pid, int signo);
 static bool can_manage_process(pcb_t* subject, pcb_t* object);
 uint64_t sys_fork(void);
