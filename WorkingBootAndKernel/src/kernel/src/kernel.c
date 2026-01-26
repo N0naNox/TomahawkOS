@@ -393,31 +393,17 @@ static void menu_thread(void) {
 }
 
 static void keyboard_flush(void) {
-	uart_puts("[FLUSH] Starting keyboard buffer flush\n");
-	
-	/* First, hard reset the buffer to clear any corruption */
+	/* Hard reset the buffer to clear any corruption */
 	keyboard_reset_buffer();
 	
-	int total_flushed = 0;
-	/* Flush multiple times to ensure buffer is clear */
+	/* Flush remaining buffered characters silently */
 	for (int attempts = 0; attempts < 10; attempts++) {
-		int flushed_this_round = 0;
-		char c;
-		while ((c = keyboard_getchar())) {
-			flushed_this_round++;
-			total_flushed++;
-			uart_puts("[FLUSH] Discarded char: ");
-			uart_putchar(c);
-			uart_puts(" (");
-			uart_putu((unsigned char)c);
-			uart_puts(")\n");
+		while (keyboard_getchar()) {
+			/* Discard silently */
 		}
 		/* Small delay between attempts */
 		for (volatile int i = 0; i < 100000; i++) {
 			__asm__ volatile("pause");
 		}
 	}
-	uart_puts("[FLUSH] Total chars flushed: ");
-	uart_putu(total_flushed);
-	uart_puts("\n");
 }

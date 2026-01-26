@@ -114,29 +114,17 @@ char keyboard_getchar(void) {
 }
 
 void keyboard_reset_buffer(void) {
-    uart_puts("[KEYBOARD] Resetting buffer: head=");
-    uart_putu(kb_head);
-    uart_puts(" tail=");
-    uart_putu(kb_tail);
-    uart_puts("\n");
-    
     /* Disable keyboard interrupts while we reset */
     uint8_t mask = hal_inb(0x21);
     mask |= (1 << 1); /* Set bit 1 to disable IRQ1 */
     hal_outb(0x21, mask);
     
     /* Drain the keyboard controller hardware buffer */
-    uart_puts("[KEYBOARD] Draining hardware controller...\n");
-    int drained = 0;
     for (int i = 0; i < 100; i++) {
         uint8_t status = hal_inb(0x64);
         if (status & 0x01) {
             /* Output buffer full - read and discard */
-            uint8_t data = hal_inb(0x60);
-            drained++;
-            uart_puts("[KEYBOARD] Drained hw byte: ");
-            uart_putu(data);
-            uart_puts("\n");
+            hal_inb(0x60);
         } else {
             break;
         }
@@ -145,9 +133,6 @@ void keyboard_reset_buffer(void) {
             __asm__ volatile("pause");
         }
     }
-    uart_puts("[KEYBOARD] Drained ");
-    uart_putu(drained);
-    uart_puts(" bytes from hardware\n");
     
     /* Reset software buffer */
     kb_head = 0;
@@ -162,8 +147,6 @@ void keyboard_reset_buffer(void) {
     mask = hal_inb(0x21);
     mask &= ~(1 << 1); /* Clear bit 1 to enable IRQ1 */
     hal_outb(0x21, mask);
-    
-    uart_puts("[KEYBOARD] Buffer reset complete\n");
 }
 
 /* Polling fallback: check controller status and echo if data ready. */

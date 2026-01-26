@@ -4,6 +4,7 @@
 #include "include/vga.h"
 #include "include/proc.h"
 #include "include/signal.h"
+#include "include/sys_proc.h"
 #include "include/idt.h"
 #include "uart.h"
 
