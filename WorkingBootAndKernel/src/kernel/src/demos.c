@@ -255,57 +255,81 @@ static const unsigned char user_program_minimal[] = {
 /* Saved context for returning from usermode demo */
 volatile uint64_t usermode_demo_return_rsp = 0;
 volatile uint64_t usermode_demo_return_rbp = 0;
+volatile uint64_t usermode_demo_return_rip = 0;
 volatile int usermode_demo_completed = 0;
+
+/* Static allocation for user pages - allocated once */
+static uintptr_t user_code_phys_static = 0;
+static uintptr_t user_stack_phys1_static = 0;
+static uintptr_t user_stack_phys2_static = 0;
+static int usermode_pages_initialized = 0;
 
 void run_usermode_demo(void) {
     vga_write("\n=== User Mode Transition Demo ===\n");
     vga_write("Testing Ring 0 -> Ring 3 privilege transition...\n\n");
     
-    /* Allocate user code page */
-    uintptr_t user_code_phys = pfa_alloc_frame();
-    if (!user_code_phys) {
-        vga_write("ERROR: Code allocation failed!\n");
-        return;
+    uintptr_t user_code_phys, user_stack_phys1, user_stack_phys2;
+    
+    /* Only allocate pages on first run */
+    if (!usermode_pages_initialized) {
+        /* Allocate user code page */
+        user_code_phys = pfa_alloc_frame();
+        if (!user_code_phys) {
+            vga_write("ERROR: Code allocation failed!\n");
+            return;
+        }
+        
+        /* Allocate TWO pages for user stack (8KB total) */
+        user_stack_phys1 = pfa_alloc_frame();
+        if (!user_stack_phys1) {
+            vga_write("ERROR: Stack allocation failed!\n");
+            pfa_free_frame(user_code_phys);
+            return;
+        }
+        
+        user_stack_phys2 = pfa_alloc_frame();
+        if (!user_stack_phys2) {
+            vga_write("ERROR: Stack allocation failed!\n");
+            pfa_free_frame(user_code_phys);
+            pfa_free_frame(user_stack_phys1);
+            return;
+        }
+        
+        /* Save for reuse */
+        user_code_phys_static = user_code_phys;
+        user_stack_phys1_static = user_stack_phys1;
+        user_stack_phys2_static = user_stack_phys2;
+        
+        /* Get current page table */
+        uintptr_t cr3 = paging_get_current_cr3();
+        
+        /* Map user code at 0x40000000 (1GB) */
+        uint64_t user_code_virt = 0x40000000;
+        paging_map_page(cr3, user_code_virt, user_code_phys, 
+                        PTE_PRESENT | PTE_RW | PTE_USER);
+        
+        /* Map user stack at 0x41000000 with USER permissions - TWO pages */
+        uint64_t user_stack_virt = 0x41000000;
+        paging_map_page(cr3, user_stack_virt, user_stack_phys1, 
+                        PTE_PRESENT | PTE_RW | PTE_USER);
+        paging_map_page(cr3, user_stack_virt + 4096, user_stack_phys2, 
+                        PTE_PRESENT | PTE_RW | PTE_USER);
+        
+        usermode_pages_initialized = 1;
+    } else {
+        user_code_phys = user_code_phys_static;
     }
     
-    /* Allocate TWO pages for user stack (8KB total) */
-    uintptr_t user_stack_phys1 = pfa_alloc_frame();
-    if (!user_stack_phys1) {
-        vga_write("ERROR: Stack allocation failed!\n");
-        pfa_free_frame(user_code_phys);
-        return;
-    }
-    
-    uintptr_t user_stack_phys2 = pfa_alloc_frame();
-    if (!user_stack_phys2) {
-        vga_write("ERROR: Stack allocation failed!\n");
-        pfa_free_frame(user_code_phys);
-        pfa_free_frame(user_stack_phys1);
-        return;
-    }
-    
-    /* Get current page table */
-    uintptr_t cr3 = paging_get_current_cr3();
-    
-    /* Map user code at 0x40000000 (1GB) - FAR above any kernel mappings */
-    uint64_t user_code_virt = 0x40000000;
-    paging_map_page(cr3, user_code_virt, user_code_phys, 
-                    PTE_PRESENT | PTE_RW | PTE_USER);
-    
-    /* Copy minimal user program - access via physical address (identity mapped) */
+    /* Always copy the user program (in case memory was corrupted) */
     void* user_code_ptr_phys = (void*)user_code_phys;
     for (size_t i = 0; i < sizeof(user_program_minimal); i++) {
         ((unsigned char*)user_code_ptr_phys)[i] = user_program_minimal[i];
     }
     
-    /* Map user stack at 0x41000000 with USER permissions - TWO pages */
+    uint64_t user_code_virt = 0x40000000;
     uint64_t user_stack_virt = 0x41000000;
-    paging_map_page(cr3, user_stack_virt, user_stack_phys1, 
-                    PTE_PRESENT | PTE_RW | PTE_USER);
-    paging_map_page(cr3, user_stack_virt + 4096, user_stack_phys2, 
-                    PTE_PRESENT | PTE_RW | PTE_USER);
     
-    /* Flush TLB for the specific pages we just mapped */
+    /* Flush TLB for the user pages */
     __asm__ volatile("invlpg (%0)" :: "r"(user_code_virt) : "memory");
     __asm__ volatile("invlpg (%0)" :: "r"(user_stack_virt) : "memory");
     __asm__ volatile("invlpg (%0)" :: "r"(user_stack_virt + 4096) : "memory");
@@ -318,20 +342,28 @@ void run_usermode_demo(void) {
     vga_write("\nJumping to Ring 3 (user mode)...\n");
     vga_write("User program will make syscall back to kernel.\n\n");
     
-    /* Save return context - syscall handler will restore this */
+    /* Reset completion flag BEFORE saving context */
     usermode_demo_completed = 0;
+    
+    /* Save return context - syscall handler will jump back here */
     __asm__ volatile(
         "mov %%rsp, %0\n"
         "mov %%rbp, %1\n"
-        : "=m"(usermode_demo_return_rsp), "=m"(usermode_demo_return_rbp)
+        "lea 1f(%%rip), %%rax\n"
+        "mov %%rax, %2\n"
+        "jmp 2f\n"
+        "1:\n"  /* Return point - syscall handler jumps here */
+        : "=m"(usermode_demo_return_rsp), "=m"(usermode_demo_return_rbp), "=m"(usermode_demo_return_rip)
+        :: "rax", "memory"
     );
     
     /* Check if we're returning from syscall */
     if (usermode_demo_completed) {
-        /* Syscall handler set this and restored our context - we're back! */
-        /* The syscall handler already displayed the completion message and waited */
+        /* Syscall handler jumped here after displaying messages and waiting for ESC */
         return;
     }
+    
+    __asm__ volatile("2:\n" ::: "memory");  /* Continue point for initial execution */
     
     // Mask the timer interrupt (IRQ0) before jumping to user mode
     uint8_t pic_mask = hal_inb(0x21);
