@@ -8,6 +8,7 @@
 #include "include/idt.h"
 #include "include/hal_port_io.h"
 #include "include/keyboard.h"
+#include "include/password_store.h"
 #include "uart.h"
 
 /* External saved context from usermode demo */
@@ -102,6 +103,18 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_SIGRETURN:
             return (uint64_t)signal_return(get_current_process(), regs);
+
+        case SYS_PASS_VERIFY:
+            /* arg1 = username, arg2 = password */
+            return (uint64_t)password_store_verify((const char*)arg1, (const char*)arg2);
+
+        case SYS_PASS_STORE:
+            /* arg1 = username, arg2 = password */
+            return (uint64_t)password_store_add((const char*)arg1, (const char*)arg2);
+
+        case SYS_PASS_EXISTS:
+            /* arg1 = username */
+            return (uint64_t)password_store_user_exists((const char*)arg1);
 
         default:
             uart_puts("[KERNEL] Unknown syscall\n");
