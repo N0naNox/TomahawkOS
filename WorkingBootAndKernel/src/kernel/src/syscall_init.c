@@ -25,10 +25,12 @@ void syscall_init() {
     __asm__ volatile("wrmsr" : : "a"(efer_low), "d"(efer_high), "c"(MSR_EFER));
 
     // 2. הגדרת הסגמנטים (STAR)
-    // הביטים 32-47 הם ה-Kernel CS/SS
-    // הביטים 48-63 הם ה-User CS/SS
-    // שים לב: זה תלוי בסידור ה-GDT שלך! בדרך כלל 0x08 לקרנל ו-0x1B למשתמש
-    uint64_t star = ((uint64_t)0x13 << 48) | ((uint64_t)0x08 << 32);
+    // הביטים 32-47 הם ה-Kernel CS/SS  
+    // הביטים 48-63 הם ה-User base selector
+    // SYSRET: CS = (STAR[48:63] + 16) | 3, SS = (STAR[48:63] + 8) | 3
+    // For User CS=0x20|3=0x23, User SS=0x18|3=0x1B:
+    // Need STAR[48:63] = 0x10 (so +16 = 0x20, +8 = 0x18)
+    uint64_t star = ((uint64_t)0x10 << 48) | ((uint64_t)0x08 << 32);
     uint32_t low = (uint32_t)star;
     uint32_t high = (uint32_t)(star >> 32);
     __asm__ volatile("wrmsr" : : "a"(low), "d"(high), "c"(MSR_STAR));

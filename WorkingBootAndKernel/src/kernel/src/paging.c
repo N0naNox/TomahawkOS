@@ -85,10 +85,17 @@ uintptr_t paging_create_pml4(void) {
 }
 
 /* Ensure a child table exists at parent[index]; create it if absent.
-   Returns physical address of child table (present) or 0 on failure. */
-static uintptr_t ensure_table(uintptr_t parent_phys, uint64_t index) {
+   Returns physical address of child table (present) or 0 on failure.
+   Propagates user flag if requested. */
+static uintptr_t ensure_table_with_flags(uintptr_t parent_phys, uint64_t index, uint64_t flags) {
     uint64_t ent = read_entry(parent_phys, index);
     if (ent & PTE_PRESENT) {
+        /* Table exists - update flags if needed */
+        if (flags & PTE_USER) {
+            /* Ensure USER bit is set at this level */
+            ent |= PTE_USER;
+            write_entry(parent_phys, index, ent);
+        }
         return (uintptr_t)(ent & PTE_ADDR_MASK);
     }
     uintptr_t child = alloc_zeroed_page();
@@ -96,8 +103,11 @@ static uintptr_t ensure_table(uintptr_t parent_phys, uint64_t index) {
         uart_puts("paging: alloc_zeroed_page failed in ensure_table\n");
         return 0;
     }
-    /* Set parent entry: child phys | present | rw */
+    /* Set parent entry: child phys | present | rw | propagate user flag */
     uint64_t newent = (child & PTE_ADDR_MASK) | PTE_PRESENT | PTE_RW;
+    if (flags & PTE_USER) {
+        newent |= PTE_USER;
+    }
     write_entry(parent_phys, index, newent);
     return child;
 }
@@ -111,18 +121,18 @@ int paging_map_page(uintptr_t pml4_phys, uint64_t vaddr, uintptr_t paddr, uint64
     uint64_t i2 = pd_index(vaddr);
     uint64_t i1 = pt_index(vaddr);
 
-    uintptr_t pdpt_phys = ensure_table(pml4_phys, i4);
+    uintptr_t pdpt_phys = ensure_table_with_flags(pml4_phys, i4, flags);
     if (!pdpt_phys) {
         uart_puts("paging: ensure pdpt failed\n");
         return -1;
     }
-    uintptr_t pd_phys = ensure_table(pdpt_phys, i3);
+    uintptr_t pd_phys = ensure_table_with_flags(pdpt_phys, i3, flags);
     if (!pd_phys) {
         uart_puts("paging: ensure pd failed\n");
         return -1;
     }
 
-    uintptr_t pt_phys = ensure_table(pd_phys, i2);
+    uintptr_t pt_phys = ensure_table_with_flags(pd_phys, i2, flags);
     if (!pt_phys) {
         uart_puts("paging: ensure pt failed\n");
         return -1;

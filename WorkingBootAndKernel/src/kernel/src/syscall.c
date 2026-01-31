@@ -14,7 +14,12 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
     switch(syscall_num) {
         case SYSCALL_TEST:
             vga_write("SYSCALL TEST: ");
-            if (arg1 != 0) vga_write((const char*)arg1);
+            if (arg1 != 0) {
+                vga_write((const char*)arg1);
+            } else {
+                vga_write("(null pointer)");
+            }
+            vga_write("\n");
             return 0;
 
         case SYS_YIELD:

@@ -48,37 +48,50 @@ syscall_entry:
     
     call syscall_handler_c
     
-    ; Restore registers from regs_t (in case signal handler modified them)
-    pop rbx         ; skip rax (return value in rax)
-    mov rbx, rax    ; save return value
-    pop rax         ; skip old rax
-    pop rax         ; skip rcx
-    pop rax         ; skip rdx
-    pop rsi
-    pop rdi
-    pop rbp
-    pop r8
-    pop r9
-    pop r10
-    pop r11
-    pop r12
-    pop r13
-    pop r14
-    pop r15
+    ; Save return value
+    mov r15, rax
     
-    add rsp, 16     ; skip int_no, err_code
+    ; RSP points to regs_t: [rax, rbx, rcx, rdx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15, int_no, err_code, rip, cs, rflags, rsp, ss]
+    ; Restore most registers (preserving r15 for return value, rcx for RIP, r11 for RFLAGS)
+    mov rax, [rsp + 0]      ; rax (will be overwritten with return value)
+    mov rbx, [rsp + 8]      ; rbx
+    ; skip rcx at [rsp + 16] - will load from rip field
+    mov rdx, [rsp + 24]     ; rdx
+    mov rsi, [rsp + 32]     ; rsi
+    mov rdi, [rsp + 40]     ; rdi
+    mov rbp, [rsp + 48]     ; rbp
+    mov r8,  [rsp + 56]     ; r8
+    mov r9,  [rsp + 64]     ; r9
+    mov r10, [rsp + 72]     ; r10
+    ; skip r11 at [rsp + 80] - will load from rflags field
+    mov r12, [rsp + 88]     ; r12
+    mov r13, [rsp + 96]     ; r13
+    mov r14, [rsp + 104]    ; r14
+    ; skip r15 at [rsp + 112] - using for return value
     
-    pop rcx         ; RIP
-    add rsp, 8      ; skip CS
-    pop r11         ; RFLAGS
-    pop rax         ; User RSP
-    mov [gs:0x10], rax  ; Store back to scratch
-    add rsp, 8      ; skip SS
+    ; Load RCX (RIP) and R11 (RFLAGS) for SYSRETQ
+    mov rcx, [rsp + 136]    ; rip field (after int_no=128, err_code=136... wait that's wrong)
+    ; Offset: 15 GPRs * 8 = 120, + int_no (8) = 128, + err_code (8) = 136, rip is at 136
+    mov rcx, [rsp + 136]    ; rip
+    mov r11, [rsp + 152]    ; rflags (rip + 8 for cs + 8)
     
-    mov rax, rbx    ; restore return value
+    ; Load user RSP into scratch
+    mov rax, [rsp + 160]    ; user rsp (after rip=136, cs=144, rflags=152)
+    mov [gs:0x10], rax
     
-    mov rsp, [gs:0x10] ; 
-
+    ; Restore return value
+    mov rax, r15
+    
+    ; Discard regs_t structure
+    add rsp, 176            ; 22 qwords * 8
+    
+    ; Build IRETQ frame on current kernel stack
+    ; IRETQ pops: RIP, CS, RFLAGS, RSP, SS
+    push qword 0x1B         ; SS (user data)
+    push qword [gs:0x10]    ; User RSP (still in GS scratch)
+    push r11                ; RFLAGS
+    push qword 0x23         ; CS (user code)
+    push rcx                ; RIP
+    
     swapgs
-
-    sysretq         ; 
+    iretq
