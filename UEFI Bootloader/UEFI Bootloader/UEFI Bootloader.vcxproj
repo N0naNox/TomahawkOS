@@ -115,9 +115,6 @@
       <EntryPointSymbol>efi_main</EntryPointSymbol>
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <DataExecutionPrevention>false</DataExecutionPrevention>
-      <AdditionalLibraryDirectories>C:\Users\Cyber_User\Downloads\gnu-efi-3.0.18\x86_64\lib;C:\Users\Cyber_User\Downloads\gnu-efi-3.0.18\x86_64\gnuefi;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libefi.a;libgnuefi.a;%(AdditionalDependencies)</AdditionalDependencies>
-      <OutputFile>$(OutDir)\$(ProjectName).efi</OutputFile>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -139,9 +136,6 @@
       <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
       <RuntimeLibrary Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">MultiThreaded</RuntimeLibrary>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="elf.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
