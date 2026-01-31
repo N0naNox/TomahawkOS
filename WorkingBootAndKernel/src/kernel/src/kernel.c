@@ -188,7 +188,10 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	/* Reload descriptor tables to their higher-half aliases before dropping identity mappings. */
 	gdt_init();
 	idt_reload_high();
-	/* Keep the identity mapping for now to avoid early faults; we already run from higher half. */
+	
+	/* DON'T remove the kernel identity map yet - we need identity mapping 
+	 * for accessing physical frames returned by pfa_alloc_frame().
+	 * TODO: Implement a proper physical memory mapping window instead of full identity map. */
 
 	/* Initialize user syscall machinery */
 	syscall_init();

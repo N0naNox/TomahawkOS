@@ -69,6 +69,9 @@ void paging_free_pml4(uintptr_t pml4_phys);
    Returns physical address of kernel PML4, or 0 on failure. */
 uintptr_t paging_setup_kernel_pml4(void);
 
+/* Remove the temporary identity mapping of the kernel after jumping to higher-half */
+void paging_remove_kernel_identity_map(uintptr_t pml4_phys);
+
 /* Get the PTE for a virtual address (returns pointer to entry or NULL if not mapped) */
 uint64_t* paging_get_pte(uintptr_t pml4_phys, uint64_t vaddr);
 

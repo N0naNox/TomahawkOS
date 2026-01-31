@@ -244,111 +244,140 @@ void run_combined_cow_signals_demo(void) {
 
 /* ========== User Mode Transition Demo ========== */
 
-/* User mode test code as raw bytes */
-static const unsigned char user_program_bytes[] = {
-    /* mov rax, 1 (SYSCALL_TEST) */
-    0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
-    /* xor rdi, rdi */
-    0x48, 0x31, 0xFF,
-    /* syscall */
-    0x0F, 0x05,
-    
-    /* mov rax, 1 (second syscall) */
-    0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
-    /* xor rdi, rdi */
-    0x48, 0x31, 0xFF,
-    /* syscall */
-    0x0F, 0x05,
-    
-    /* infinite loop: pause; jmp -2 */
-    0xF3, 0x90,  /* pause */
-    0xEB, 0xFC   /* jmp -4 (to pause) */
+/* Minimal user mode program - executes syscall then loops */
+static const unsigned char user_program_minimal[] = {
+    0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,  /* mov rax, 1 (SYSCALL_TEST) */
+    0x48, 0x31, 0xFF,                          /* xor rdi, rdi */
+    0x0F, 0x05,                                /* syscall */
+    0xEB, 0xFE                                 /* jmp $ (infinite loop) */
 };
+
+/* Saved context for returning from usermode demo */
+volatile uint64_t usermode_demo_return_rsp = 0;
+volatile uint64_t usermode_demo_return_rbp = 0;
+volatile int usermode_demo_completed = 0;
 
 void run_usermode_demo(void) {
     vga_write("\n=== User Mode Transition Demo ===\n");
-    uart_puts("\n=== User Mode Transition Demo ===\n");
-    vga_write("Jumping from Ring 0 (Kernel) to Ring 3 (User)...\n");
-    uart_puts("Attempting privilege level transition...\n");
-    
-    /* Allocate user stack (1 page = 4KB) */
-    uintptr_t user_stack_phys = pfa_alloc_frame();
-    if (!user_stack_phys) {
-        uart_puts("[ERROR] Failed to allocate user stack!\n");
-        vga_write("ERROR: Stack allocation failed!\n");
-        return;
-    }
+    vga_write("Testing Ring 0 -> Ring 3 privilege transition...\n\n");
     
     /* Allocate user code page */
     uintptr_t user_code_phys = pfa_alloc_frame();
     if (!user_code_phys) {
-        uart_puts("[ERROR] Failed to allocate user code page!\n");
         vga_write("ERROR: Code allocation failed!\n");
-        pfa_free_frame(user_stack_phys);
         return;
     }
     
-    /* Allocate additional pages for code (4 pages = 16KB total) */
-    uintptr_t code_pages[4];
-    code_pages[0] = user_code_phys;
-    for (int i = 1; i < 4; i++) {
-        code_pages[i] = pfa_alloc_frame();
-        if (!code_pages[i]) {
-            uart_puts("[ERROR] Failed to allocate code pages!\n");
-            vga_write("ERROR: Code allocation failed!\n");
-            return;
-        }
+    /* Allocate TWO pages for user stack (8KB total) */
+    uintptr_t user_stack_phys1 = pfa_alloc_frame();
+    if (!user_stack_phys1) {
+        vga_write("ERROR: Stack allocation failed!\n");
+        pfa_free_frame(user_code_phys);
+        return;
+    }
+    
+    uintptr_t user_stack_phys2 = pfa_alloc_frame();
+    if (!user_stack_phys2) {
+        vga_write("ERROR: Stack allocation failed!\n");
+        pfa_free_frame(user_code_phys);
+        pfa_free_frame(user_stack_phys1);
+        return;
     }
     
     /* Get current page table */
     uintptr_t cr3 = paging_get_current_cr3();
     
-    /* Map user code pages at 0x400000 with RW+User for copying */
-    uint64_t user_code_virt = 0x400000;
-    for (int i = 0; i < 4; i++) {
-        paging_map_page(cr3, user_code_virt + (i * 4096), code_pages[i], 
-                        PTE_PRESENT | PTE_RW | PTE_USER);
-    }
-    
-    /* Copy user program code to the new pages */
-    void* user_code_ptr = (void*)user_code_virt;
-    for (size_t i = 0; i < sizeof(user_program_bytes); i++) {
-        ((unsigned char*)user_code_ptr)[i] = user_program_bytes[i];
-    }
-    
-    /* Map user stack at 0x800000 (8MB) - map 2 pages for safety */
-    uint64_t user_stack_virt = 0x800000;
-    paging_map_page(cr3, user_stack_virt, user_stack_phys, 
+    /* Map user code at 0x40000000 (1GB) - FAR above any kernel mappings */
+    uint64_t user_code_virt = 0x40000000;
+    paging_map_page(cr3, user_code_virt, user_code_phys, 
                     PTE_PRESENT | PTE_RW | PTE_USER);
     
-    /* Allocate and map one more page for the stack (grows downward) */
-    uintptr_t stack_page2_phys = pfa_alloc_frame();
-    if (stack_page2_phys) {
-        paging_map_page(cr3, user_stack_virt + 4096, stack_page2_phys, 
-                        PTE_PRESENT | PTE_RW | PTE_USER);
+    /* Copy minimal user program - access via physical address (identity mapped) */
+    void* user_code_ptr_phys = (void*)user_code_phys;
+    for (size_t i = 0; i < sizeof(user_program_minimal); i++) {
+        ((unsigned char*)user_code_ptr_phys)[i] = user_program_minimal[i];
     }
     
-    /* Stack top at end of second page minus 16 bytes for alignment */
+    /* Map user stack at 0x41000000 with USER permissions - TWO pages */
+    uint64_t user_stack_virt = 0x41000000;
+    paging_map_page(cr3, user_stack_virt, user_stack_phys1, 
+                    PTE_PRESENT | PTE_RW | PTE_USER);
+    paging_map_page(cr3, user_stack_virt + 4096, user_stack_phys2, 
+                    PTE_PRESENT | PTE_RW | PTE_USER);
+    
+    /* Flush TLB for the specific pages we just mapped */
+    __asm__ volatile("invlpg (%0)" :: "r"(user_code_virt) : "memory");
+    __asm__ volatile("invlpg (%0)" :: "r"(user_stack_virt) : "memory");
+    __asm__ volatile("invlpg (%0)" :: "r"(user_stack_virt + 4096) : "memory");
+    
+    /* Stack top at end of SECOND page minus 16 bytes for alignment */
     uint64_t user_stack_top = user_stack_virt + (2 * 4096) - 16;
     
-    uart_puts("[KERNEL] User code mapped at: 0x");
-    uart_puthex(user_code_virt);
-    uart_puts("\n[KERNEL] User stack at: 0x");
-    uart_puthex(user_stack_virt);
-    uart_puts("\n[KERNEL] Jumping to user mode at entry: 0x");
-    uart_puthex(user_code_virt);
-    uart_puts(" with stack: 0x");
-    uart_puthex(user_stack_top);
-    uart_puts("\n");
+    vga_write("User code mapped at: 0x40000000\n");
+    vga_write("User stack at: 0x41001FF0\n");
+    vga_write("\nJumping to Ring 3 (user mode)...\n");
+    vga_write("User program will make syscall back to kernel.\n\n");
     
-    vga_write("Executing user program...\n");
+    /* Save return context - syscall handler will restore this */
+    usermode_demo_completed = 0;
+    __asm__ volatile(
+        "mov %%rsp, %0\n"
+        "mov %%rbp, %1\n"
+        : "=m"(usermode_demo_return_rsp), "=m"(usermode_demo_return_rbp)
+    );
     
-    /* This will jump to Ring 3 and never return */
-    jump_to_user(user_code_virt, user_stack_top);
+    /* Check if we're returning from syscall */
+    if (usermode_demo_completed) {
+        /* Syscall handler set this and restored our context - we're back! */
+        /* The syscall handler already displayed the completion message and waited */
+        return;
+    }
+    
+    // Mask the timer interrupt (IRQ0) before jumping to user mode
+    uint8_t pic_mask = hal_inb(0x21);
+    hal_outb(0x21, pic_mask | 0x01);  // Mask IRQ0 (timer)
+    
+    // Disable interrupts and jump to user mode
+    register uint64_t rip_val __asm__("rdi") = user_code_virt;
+    register uint64_t rsp_val __asm__("rsi") = user_stack_top;
+    
+    __asm__ volatile(
+        "cli\n"
+        // Load user data segment into DS, ES, FS, GS
+        "mov $0x1B, %%ax\n"
+        "mov %%ax, %%ds\n"
+        "mov %%ax, %%es\n"
+        "mov %%ax, %%fs\n"
+        "mov %%ax, %%gs\n"
+        // Build IRETQ frame
+        "push $0x1B\n"        // SS
+        "push %%rsi\n"        // RSP (user stack)
+        "push $0x202\n"       // RFLAGS (IF=1)
+        "push $0x23\n"        // CS 
+        "push %%rdi\n"        // RIP (user code)
+        // Clear all GPRs
+        "xor %%rax, %%rax\n"
+        "xor %%rbx, %%rbx\n"
+        "xor %%rcx, %%rcx\n"
+        "xor %%rdx, %%rdx\n"
+        "xor %%rsi, %%rsi\n"
+        "xor %%rdi, %%rdi\n"
+        "xor %%rbp, %%rbp\n"
+        "xor %%r8, %%r8\n"
+        "xor %%r9, %%r9\n"
+        "xor %%r10, %%r10\n"
+        "xor %%r11, %%r11\n"
+        "xor %%r12, %%r12\n"
+        "xor %%r13, %%r13\n"
+        "xor %%r14, %%r14\n"
+        "xor %%r15, %%r15\n"
+        "iretq\n"
+        :
+        : "r"(rip_val), "r"(rsp_val)
+        : "memory", "rax"
+    );
     
     /* Should never reach here */
-    uart_puts("[ERROR] Returned from user mode unexpectedly!\n");
-    vga_write("ERROR: Unexpected return from user mode!\n");
 }
 
 /* ========== VFS Demo ========== */
@@ -358,9 +387,6 @@ void run_vfs_demo(void) {
     vga_write("=== VFS (Virtual File System) Demo ===\n");
     vga_write("Testing basic file operations...\n\n");
     
-    uart_puts("\n=== VFS Demo ===\n");
-    uart_puts("Initializing VFS...\n");
-    
     /* Initialize VFS */
     vfs_init();
     
@@ -369,7 +395,6 @@ void run_vfs_demo(void) {
     struct vnode* file = vfs_create_vnode(VREG);
     if (!file) {
         vga_write("ERROR: Failed to create file!\n");
-        uart_puts("[VFS] ERROR: vnode creation failed\n");
         return;
     }
     vga_write("File created successfully!\n");
@@ -377,7 +402,6 @@ void run_vfs_demo(void) {
     /* Open the file */
     if (vfs_open(file) != 0) {
         vga_write("ERROR: Failed to open file!\n");
-        uart_puts("[VFS] ERROR: open failed\n");
         vfs_free_vnode(file);
         return;
     }
@@ -392,12 +416,8 @@ void run_vfs_demo(void) {
     int bytes_written = vfs_write(file, test_data, 35);
     if (bytes_written < 0) {
         vga_write("ERROR: Write failed!\n");
-        uart_puts("[VFS] ERROR: write failed\n");
     } else {
         vga_write("Write successful!\n");
-        uart_puts("[VFS] Bytes written: ");
-        uart_putu(bytes_written);
-        uart_puts("\n");
     }
     
     /* Read data back */
@@ -407,13 +427,8 @@ void run_vfs_demo(void) {
     int bytes_read = vfs_read(file, read_buffer, 64);
     if (bytes_read < 0) {
         vga_write("ERROR: Read failed!\n");
-        uart_puts("[VFS] ERROR: read failed\n");
     } else {
         vga_write("Read successful!\n");
-        uart_puts("[VFS] Bytes read: ");
-        uart_putu(bytes_read);
-        uart_puts("\n");
-        
         vga_write("Data: ");
         vga_write(read_buffer);
         vga_write("\n");
@@ -425,7 +440,6 @@ void run_vfs_demo(void) {
     
     vga_write("\n=== VFS Demo Complete! ===\n");
     vga_write("Press ESC to return to menu.\n");
-    uart_puts("[VFS] Demo complete\n");
     
     /* Wait for ESC */
     demo_stop_requested = 0;
