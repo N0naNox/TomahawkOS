@@ -6,48 +6,54 @@ global jump_to_user
 section .text
 
 gdt_reload_segments:
-    mov ax, 0x10      ; Kernel Data Selector
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
     
-    push 0x08         ; Kernel Code selector
+    push 0x08
     lea rax, [rel .reload_cs]
     push rax
-    retfq             
+    retfq
 .reload_cs:
     ret
 
 ; jump_to_user(uint64_t entry_point, uint64_t user_stack)
+; RDI = entry, RSI = stack
 jump_to_user:
-    ; rdi = entry_point (RIP)
-    ; rsi = user_stack  (RSP)
-
-    cli               ; חובה לבטל אינטררפטים לפני החלפת סגמנטים
-
-    ; טעינת סגמנטים של User Mode (אינדקס 3 + RPL 3 = 0x1B)
-    mov ax, 0x1B      ; <--- שונה מ-0x23 ל-0x1B
+    cli
+    
+    ; Load user data segments BEFORE IRETQ
+    mov ax, 0x1B  ; User data segment
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
-    ; הערה: SS ייטען אוטומטית על ידי ה-IRETQ מהמחסנית
-
-    ; הכנת ה-Stack Frame עבור IRETQ
-    push 0x1B           ; SS (User Data: 0x18 | 3) <--- שונה מ-0x23 ל-0x1B
-    push rsi            ; RSP (User Stack)
-    push 0x202          ; RFLAGS
-    push 0x23           ; CS (User Code: 0x20 | 3) <--- שונה מ-0x1B ל-0x23
-    push rdi          ; RIP (Entry Point)
-
-    ; ניקוי רגיסטרים כדי שהמשתמש לא יראה "שאריות" מהקרנל
+    
+    ; Build IRETQ frame: [SS] [RSP] [RFLAGS] [CS] [RIP]
+    push qword 0x1B    ; SS
+    push rsi           ; RSP
+    push qword 0x202   ; RFLAGS
+    push qword 0x23    ; CS
+    push rdi           ; RIP
+    
+    ; Clear all registers
     xor rax, rax
     xor rbx, rbx
     xor rcx, rcx
     xor rdx, rdx
+    xor rsi, rsi
+    xor rdi, rdi
     xor rbp, rbp
-    ; אנחנו לא נוגעים ב-rdi, rsi כי כבר דחפנו אותם למחסנית
+    xor r8, r8
+    xor r9, r9
+    xor r10, r10
+    xor r11, r11
+    xor r12, r12
+    xor r13, r13
+    xor r14, r14
+    xor r15, r15
     
     iretq

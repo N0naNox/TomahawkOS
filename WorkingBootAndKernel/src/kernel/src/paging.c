@@ -85,10 +85,17 @@ uintptr_t paging_create_pml4(void) {
 }
 
 /* Ensure a child table exists at parent[index]; create it if absent.
-   Returns physical address of child table (present) or 0 on failure. */
-static uintptr_t ensure_table(uintptr_t parent_phys, uint64_t index) {
+   Returns physical address of child table (present) or 0 on failure.
+   Propagates user flag if requested. */
+static uintptr_t ensure_table_with_flags(uintptr_t parent_phys, uint64_t index, uint64_t flags) {
     uint64_t ent = read_entry(parent_phys, index);
     if (ent & PTE_PRESENT) {
+        /* Table exists - update flags if needed */
+        if (flags & PTE_USER) {
+            /* Ensure USER bit is set at this level */
+            ent |= PTE_USER;
+            write_entry(parent_phys, index, ent);
+        }
         return (uintptr_t)(ent & PTE_ADDR_MASK);
     }
     uintptr_t child = alloc_zeroed_page();
@@ -96,8 +103,11 @@ static uintptr_t ensure_table(uintptr_t parent_phys, uint64_t index) {
         uart_puts("paging: alloc_zeroed_page failed in ensure_table\n");
         return 0;
     }
-    /* Set parent entry: child phys | present | rw */
+    /* Set parent entry: child phys | present | rw | propagate user flag */
     uint64_t newent = (child & PTE_ADDR_MASK) | PTE_PRESENT | PTE_RW;
+    if (flags & PTE_USER) {
+        newent |= PTE_USER;
+    }
     write_entry(parent_phys, index, newent);
     return child;
 }
@@ -111,18 +121,18 @@ int paging_map_page(uintptr_t pml4_phys, uint64_t vaddr, uintptr_t paddr, uint64
     uint64_t i2 = pd_index(vaddr);
     uint64_t i1 = pt_index(vaddr);
 
-    uintptr_t pdpt_phys = ensure_table(pml4_phys, i4);
+    uintptr_t pdpt_phys = ensure_table_with_flags(pml4_phys, i4, flags);
     if (!pdpt_phys) {
         uart_puts("paging: ensure pdpt failed\n");
         return -1;
     }
-    uintptr_t pd_phys = ensure_table(pdpt_phys, i3);
+    uintptr_t pd_phys = ensure_table_with_flags(pdpt_phys, i3, flags);
     if (!pd_phys) {
         uart_puts("paging: ensure pd failed\n");
         return -1;
     }
 
-    uintptr_t pt_phys = ensure_table(pd_phys, i2);
+    uintptr_t pt_phys = ensure_table_with_flags(pd_phys, i2, flags);
     if (!pt_phys) {
         uart_puts("paging: ensure pt failed\n");
         return -1;
@@ -259,7 +269,7 @@ uintptr_t paging_setup_kernel_pml4(void) {
 
     uart_puts("paging: pml4 allocated\n");
 
-    /* Identity-map kernel region (kernel_start to kernel_end) */
+    /* Get kernel boundaries */
     uintptr_t kstart = (uintptr_t)&kernel_start;
     uintptr_t kend   = (uintptr_t)&kernel_end;
     
@@ -272,13 +282,14 @@ uintptr_t paging_setup_kernel_pml4(void) {
     
     const uint64_t k_flags = PTE_PRESENT | PTE_RW | PTE_GLOBAL;
 
+    /* ONLY create identity mapping temporarily - we'll remove it after jumping to higher-half */
     if (paging_map_range(pml4, kstart_aligned, kstart_aligned,
                          n_kernel_pages, k_flags)) {
         uart_puts("paging: map kernel failed\n");
         return 0;  /* fail */
     }
 
-    /* Higher-half alias for the kernel region */
+    /* Higher-half mapping for the kernel region - this is the PERMANENT mapping */
     uintptr_t kvirt_base = KERNEL_VIRT_BASE + kstart_aligned;
     if (paging_map_range(pml4, kvirt_base, kstart_aligned,
                          n_kernel_pages, k_flags)) {
@@ -286,7 +297,7 @@ uintptr_t paging_setup_kernel_pml4(void) {
         return 0;
     }
 
-    /* Identity-map early I/O region (0 to 4 MiB) */
+    /* Identity-map early I/O region (0 to 4 MiB) - needed for VGA, UART, etc */
     size_t n_io_pages = EARLY_IO_SIZE / PAGE_SIZE;
     if (paging_map_range(pml4, 0, 0, n_io_pages, PTE_PRESENT | PTE_RW | PTE_GLOBAL)) {
         uart_puts("paging: map io failed\n");
@@ -305,6 +316,34 @@ uintptr_t paging_setup_kernel_pml4(void) {
     return pml4;
 }
 
+/* Remove the identity mapping of the kernel code after jumping to higher-half.
+ * This frees up low memory (1MB-4MB range) for user programs. */
+void paging_remove_kernel_identity_map(uintptr_t pml4_phys) {
+    extern char kernel_start;
+    extern char kernel_end;
+    
+    uintptr_t kstart = (uintptr_t)&kernel_start;
+    uintptr_t kend   = (uintptr_t)&kernel_end;
+    
+    uintptr_t kstart_aligned = kstart & ~(PAGE_SIZE - 1);
+    uintptr_t kend_aligned = (kend + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    
+    size_t n_kernel_pages = (kend_aligned - kstart_aligned) / PAGE_SIZE;
+    
+    uart_puts("paging: removing kernel identity map from 0x");
+    uart_puthex(kstart_aligned);
+    uart_puts(" (");
+    uart_putu(n_kernel_pages);
+    uart_puts(" pages)...\n");
+    
+    /* Unmap the kernel's identity mapping (low addresses) */
+    paging_unmap_range(pml4_phys, kstart_aligned, n_kernel_pages);
+    
+    /* Flush TLB by reloading CR3 */
+    paging_load_cr3(pml4_phys);
+    
+    uart_puts("paging: identity map removed, low memory freed for user programs\n");
+}
 
 
 void paging_set_user_bit(uintptr_t virt_addr, int enable) {

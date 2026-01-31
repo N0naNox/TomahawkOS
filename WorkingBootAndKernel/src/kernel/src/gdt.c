@@ -67,7 +67,10 @@ void gdt_init() {
 
     extern char stack_top; // מוגדר ב-linker script
 
-    g_tss.rsp0 = (uint64_t)&stack_top + KERNEL_VIRT_BASE;
+    // The kernel runs at physical addresses (identity mapped), NOT at higher half
+    // So we should NOT add KERNEL_VIRT_BASE
+    g_tss.rsp0 = (uint64_t)&stack_top;
+    
     write_tss(5, (uint64_t)&g_tss, sizeof(g_tss) - 1);
 
     g_gdtr.limit = (sizeof(struct gdt_entry) * 7) - 1;

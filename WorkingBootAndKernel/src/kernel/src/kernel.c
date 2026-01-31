@@ -42,7 +42,9 @@ typedef enum {
 	DEMO_ECHO = 1,
 	DEMO_SCHED = 2,
 	DEMO_COW_SIGNALS = 3,
-	DEMO_TESTS = 4
+	DEMO_TESTS = 4,
+	DEMO_USERMODE = 5,
+	DEMO_VFS = 6
 } demo_mode_t;
 
 static demo_mode_t select_demo(void);
@@ -186,7 +188,10 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	/* Reload descriptor tables to their higher-half aliases before dropping identity mappings. */
 	gdt_init();
 	idt_reload_high();
-	/* Keep the identity mapping for now to avoid early faults; we already run from higher half. */
+	
+	/* DON'T remove the kernel identity map yet - we need identity mapping 
+	 * for accessing physical frames returned by pfa_alloc_frame().
+	 * TODO: Implement a proper physical memory mapping window instead of full identity map. */
 
 	/* Initialize user syscall machinery */
 	syscall_init();
@@ -251,7 +256,7 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 }
 
 static demo_mode_t select_demo(void) {
-	uart_puts("[SELECT] Waiting for demo selection (1-4)...\n");
+	uart_puts("[SELECT] Waiting for demo selection (1-6)...\n");
 	while (1) {
 		char c = keyboard_getchar();
 		if (c == '1') {
@@ -269,6 +274,14 @@ static demo_mode_t select_demo(void) {
 		else if (c == '4') {
 			uart_puts("[SELECT] Selected: 4\n");
 			return DEMO_TESTS;
+		}
+		else if (c == '5') {
+			uart_puts("[SELECT] Selected: 5\n");
+			return DEMO_USERMODE;
+		}
+		else if (c == '6') {
+			uart_puts("[SELECT] Selected: 6\n");
+			return DEMO_VFS;
 		}
 		/* Silently ignore all other characters (including garbage) */
 	}
@@ -357,14 +370,16 @@ static void menu_thread(void) {
 		keyboard_flush();
 		/* Clear screen and prompt */
 		vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests\n");
+		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests, 5=usermode, 6=vfs\n");
 		vga_write("Select demo:\n");
 		vga_write("  1) Keyboard echo (ESC to stop)\n");
 		vga_write("  2) Scheduler threads (ESC to stop)\n");
 		vga_write("  3) COW Fork + Signals (ESC to stop)\n");
 		vga_write("  4) Run Kernel Unit Tests (ESC to stop)\n");
+		vga_write("  5) Jump to User Mode (Ring 3 Test)\n");
+		vga_write("  6) VFS Test (Virtual File System)\n");
 		vga_write("\n  Press F12 to shutdown\n");
-		vga_write("Press 1-4...\n");
+		vga_write("Press 1-6...\n");
 
 		demo_mode_t mode = select_demo();
 
@@ -384,6 +399,12 @@ static void menu_thread(void) {
 			uart_puts("Tests complete. Press ESC to continue...\n");
 			while (!demo_stop_requested) { __asm__ volatile("pause"); }
 		}
+		else if (mode == DEMO_USERMODE) {
+			run_usermode_demo();
+		}
+		else if (mode == DEMO_VFS) {
+			run_vfs_demo();
+		}
 		else {
 			run_echo_demo();
 		}
@@ -393,31 +414,17 @@ static void menu_thread(void) {
 }
 
 static void keyboard_flush(void) {
-	uart_puts("[FLUSH] Starting keyboard buffer flush\n");
-	
-	/* First, hard reset the buffer to clear any corruption */
+	/* Hard reset the buffer to clear any corruption */
 	keyboard_reset_buffer();
 	
-	int total_flushed = 0;
-	/* Flush multiple times to ensure buffer is clear */
+	/* Flush remaining buffered characters silently */
 	for (int attempts = 0; attempts < 10; attempts++) {
-		int flushed_this_round = 0;
-		char c;
-		while ((c = keyboard_getchar())) {
-			flushed_this_round++;
-			total_flushed++;
-			uart_puts("[FLUSH] Discarded char: ");
-			uart_putchar(c);
-			uart_puts(" (");
-			uart_putu((unsigned char)c);
-			uart_puts(")\n");
+		while (keyboard_getchar()) {
+			/* Discard silently */
 		}
 		/* Small delay between attempts */
 		for (volatile int i = 0; i < 100000; i++) {
 			__asm__ volatile("pause");
 		}
 	}
-	uart_puts("[FLUSH] Total chars flushed: ");
-	uart_putu(total_flushed);
-	uart_puts("\n");
 }

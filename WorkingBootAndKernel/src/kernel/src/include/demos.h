@@ -18,4 +18,10 @@ void run_signal_demo(void);
 /* Run combined COW + signals demo */
 void run_combined_cow_signals_demo(void);
 
+/* Run user mode transition demo */
+void run_usermode_demo(void);
+
+/* Run VFS demo */
+void run_vfs_demo(void);
+
 #endif /* DEMOS_H */

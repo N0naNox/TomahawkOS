@@ -1,5 +1,14 @@
 #pragma once
-#include <cstdint>
+#include <stdint.h>
+#include <stddef.h>
+
+enum vtype {
+    VNON,   /* No type */
+    VREG,   /* Regular file */
+    VDIR,   /* Directory */
+    VCHR,   /* Character device */
+    VBLK    /* Block device */
+};
 
 struct vnode {
     enum vtype v_type;      // VREG (קובץ), VDIR (תיקייה), VCHR (מכשיר כמו מקלדת)
