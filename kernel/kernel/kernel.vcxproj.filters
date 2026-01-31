@@ -15,13 +15,24 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.c">
+    <ClCompile Include="gdt.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="kernel.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="elf.h">
+    <ClInclude Include="gdt.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <MASM Include="gdt.asm">
+      <Filter>Source Files</Filter>
+    </MASM>
+    <MASM Include="hlt.asm">
+      <Filter>Source Files</Filter>
+    </MASM>
   </ItemGroup>
 </Project>
