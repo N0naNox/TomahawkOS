@@ -46,14 +46,12 @@ typedef enum {
 	DEMO_TESTS = 4,
 	DEMO_USERMODE = 5,
 	DEMO_VFS = 6,
-	DEMO_PASSWORD = 7,
-	DEMO_USERMODE_PASSWORD = 8
+	DEMO_USERMODE_PASSWORD = 7
 } demo_mode_t;
 
 static demo_mode_t select_demo(void);
 static void run_echo_demo(void);
 static void run_scheduler_demo(void);
-static void run_password_demo(void);
 static void demo_busywait(void);
 
 volatile int demo_stop_requested = 0;
@@ -292,10 +290,6 @@ static demo_mode_t select_demo(void) {
 		}
 		else if (c == '7') {
 			uart_puts("[SELECT] Selected: 7\n");
-			return DEMO_PASSWORD;
-		}
-		else if (c == '8') {
-			uart_puts("[SELECT] Selected: 8\n");
 			return DEMO_USERMODE_PASSWORD;
 		}
 		/* Silently ignore all other characters (including garbage) */
@@ -446,82 +440,12 @@ static int read_password(char* buffer, int max_len) {
 	return pos;
 }
 
-static void run_password_demo(void) {
-	char username[32];
-	char password[32];
-	
-	vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-	vga_write("=== Password Hash Storage Demo ===\n\n");
-	vga_write("This demo shows SHA256 password hashing in RAM.\n");
-	vga_write("Default user: admin / password: 1234\n\n");
-	vga_write("Commands:\n");
-	vga_write("  1) Login (verify credentials)\n");
-	vga_write("  2) Register new user\n");
-	vga_write("  3) Check if user exists\n");
-	vga_write("  ESC) Return to menu\n\n");
-	
-	while (1) {
-		vga_write("\nChoice: ");
-		char c = 0;
-		while (!c) {
-			c = keyboard_getchar();
-			__asm__ volatile("pause");
-		}
-		vga_putc(c);
-		vga_putc('\n');
-		
-		if (c == 27) { /* ESC */
-			break;
-		}
-		
-		if (c == '1') {
-			/* Login */
-			vga_write("Username: ");
-			if (read_line(username, sizeof(username)) < 0) continue;
-			
-			vga_write("Password: ");
-			if (read_password(password, sizeof(password)) < 0) continue;
-			
-			if (password_store_verify(username, password) == 0) {
-				vga_write("*** LOGIN SUCCESSFUL ***\n");
-			} else {
-				vga_write("*** LOGIN FAILED ***\n");
-			}
-		}
-		else if (c == '2') {
-			/* Register */
-			vga_write("New username: ");
-			if (read_line(username, sizeof(username)) < 0) continue;
-			
-			vga_write("New password: ");
-			if (read_password(password, sizeof(password)) < 0) continue;
-			
-			if (password_store_add(username, password) == 0) {
-				vga_write("*** USER REGISTERED ***\n");
-			} else {
-				vga_write("*** REGISTRATION FAILED ***\n");
-			}
-		}
-		else if (c == '3') {
-			/* Check existence */
-			vga_write("Username to check: ");
-			if (read_line(username, sizeof(username)) < 0) continue;
-			
-			if (password_store_user_exists(username)) {
-				vga_write("User EXISTS\n");
-			} else {
-				vga_write("User NOT FOUND\n");
-			}
-		}
-	}
-}
-
 static void menu_thread(void) {
 	for (;;) {
 		keyboard_flush();
 		/* Clear screen and prompt */
 		vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests, 5=usermode, 6=vfs, 7=password, 8=usermode-password\n");
+		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests, 5=usermode, 6=vfs, 7=password\n");
 		vga_write("Select demo:\n");
 		vga_write("  1) Keyboard echo (ESC to stop)\n");
 		vga_write("  2) Scheduler threads (ESC to stop)\n");
@@ -529,10 +453,9 @@ static void menu_thread(void) {
 		vga_write("  4) Run Kernel Unit Tests (ESC to stop)\n");
 		vga_write("  5) Jump to User Mode (Ring 3 Test)\n");
 		vga_write("  6) VFS Test (Virtual File System)\n");
-		vga_write("  7) Password Store Demo (Kernel Mode)\n");
-		vga_write("  8) Password Store Demo (User Mode/Ring 3)\n");
+		vga_write("  7) Password Store Demo (User Mode/Ring 3)\n");
 		vga_write("\n  Press F12 to shutdown\n");
-		vga_write("Press 1-8...\n");
+		vga_write("Press 1-7...\n");
 
 		demo_mode_t mode = select_demo();
 
@@ -557,9 +480,6 @@ static void menu_thread(void) {
 		}
 		else if (mode == DEMO_VFS) {
 			run_vfs_demo();
-		}
-		else if (mode == DEMO_PASSWORD) {
-			run_password_demo();
 		}
 		else if (mode == DEMO_USERMODE_PASSWORD) {
 			run_usermode_password_demo();

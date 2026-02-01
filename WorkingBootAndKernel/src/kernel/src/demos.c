@@ -333,6 +333,15 @@ void run_usermode_demo(void) {
         : "=m"(usermode_demo_return_rsp), "=m"(usermode_demo_return_rbp)
     );
     
+    /* Save return RIP - jump here after syscall */
+    __asm__ volatile(
+        "lea 1f(%%rip), %%rax\n"
+        "mov %%rax, %0\n"
+        "1:\n"
+        : "=m"(usermode_demo_return_rip)
+        : : "rax"
+    );
+    
     /* Check if we're returning from syscall */
     if (usermode_demo_completed) {
         /* Syscall handler set this and restored our context - we're back! */
