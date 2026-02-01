@@ -47,4 +47,20 @@ int password_store_user_exists(const char* username);
  */
 int password_store_get_count(void);
 
+/**
+ * @brief Get user ID (index) for a username
+ * @param username The username to look up
+ * @return User ID (0+) if found, -1 if not found
+ */
+int password_store_get_uid(const char* username);
+
+/**
+ * @brief Get username for a user ID
+ * @param uid The user ID
+ * @param buf Buffer to store username
+ * @param buf_size Size of buffer
+ * @return 0 on success, -1 on failure
+ */
+int password_store_get_username(int uid, char* buf, int buf_size);
+
 #endif /* PASSWORD_STORE_H */

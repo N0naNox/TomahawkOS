@@ -15,3 +15,9 @@
 #define SYS_WRITE 13
 #define SYS_GETCHAR 14
 #define SYS_PUTCHAR 15
+#define SYS_GETUID 16
+#define SYS_SETUID 17
+#define SYS_GET_USERNAME 18
+#define SYS_CLEAR_SCREEN 19
+#define SYS_SHELL_EXIT 20
+#define SYS_PASS_GET_UID 21

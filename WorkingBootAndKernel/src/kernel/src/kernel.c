@@ -46,7 +46,7 @@ typedef enum {
 	DEMO_TESTS = 4,
 	DEMO_USERMODE = 5,
 	DEMO_VFS = 6,
-	DEMO_USERMODE_PASSWORD = 7
+	DEMO_TOMAHAWK_SHELL = 7
 } demo_mode_t;
 
 static demo_mode_t select_demo(void);
@@ -290,7 +290,7 @@ static demo_mode_t select_demo(void) {
 		}
 		else if (c == '7') {
 			uart_puts("[SELECT] Selected: 7\n");
-			return DEMO_USERMODE_PASSWORD;
+			return DEMO_TOMAHAWK_SHELL;
 		}
 		/* Silently ignore all other characters (including garbage) */
 	}
@@ -441,53 +441,11 @@ static int read_password(char* buffer, int max_len) {
 }
 
 static void menu_thread(void) {
+	/* Boot directly into Tomahawk Shell */
 	for (;;) {
 		keyboard_flush();
-		/* Clear screen and prompt */
 		vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests, 5=usermode, 6=vfs, 7=password\n");
-		vga_write("Select demo:\n");
-		vga_write("  1) Keyboard echo (ESC to stop)\n");
-		vga_write("  2) Scheduler threads (ESC to stop)\n");
-		vga_write("  3) COW Fork + Signals (ESC to stop)\n");
-		vga_write("  4) Run Kernel Unit Tests (ESC to stop)\n");
-		vga_write("  5) Jump to User Mode (Ring 3 Test)\n");
-		vga_write("  6) VFS Test (Virtual File System)\n");
-		vga_write("  7) Password Store Demo (User Mode/Ring 3)\n");
-		vga_write("\n  Press F12 to shutdown\n");
-		vga_write("Press 1-7...\n");
-
-		demo_mode_t mode = select_demo();
-
-		if (mode == DEMO_SCHED) {
-			run_scheduler_demo();
-		} 
-		else if (mode == DEMO_COW_SIGNALS) {
-			run_combined_cow_signals_demo();
-		}
-		else if (mode == DEMO_TESTS) {
-			vga_write("Running kernel unit tests...\n");
-			uart_puts("Running kernel unit tests...\n");
-			demo_stop_requested = 0;
-			create_process("esc-watcher", demo_esc_watcher);
-			run_kernel_tests();
-			vga_write("Tests complete. Press ESC to continue...\n");
-			uart_puts("Tests complete. Press ESC to continue...\n");
-			while (!demo_stop_requested) { __asm__ volatile("pause"); }
-		}
-		else if (mode == DEMO_USERMODE) {
-			run_usermode_demo();
-		}
-		else if (mode == DEMO_VFS) {
-			run_vfs_demo();
-		}
-		else if (mode == DEMO_USERMODE_PASSWORD) {
-			run_usermode_password_demo();
-		}
-		else {
-			run_echo_demo();
-		}
-
+		run_tomahawk_shell();
 		keyboard_flush();
 	}
 }
