@@ -59,3 +59,64 @@ void* memset(void* dst, int c, size_t n)
 
 	return dst;
 }
+
+/*
+ * strcmp
+ * Compares two strings.
+ * Returns 0 if equal, <0 if s1 < s2, >0 if s1 > s2.
+ */
+int strcmp(const char* s1, const char* s2)
+{
+	while (*s1 && (*s1 == *s2)) {
+		s1++;
+		s2++;
+	}
+	return *(const unsigned char*)s1 - *(const unsigned char*)s2;
+}
+
+/*
+ * int_to_str
+ * Converts an integer to a string in the given base.
+ * Returns the buffer pointer.
+ */
+char* int_to_str(int value, char* buf, int base)
+{
+	char* p = buf;
+	char* p1, *p2;
+	unsigned int uvalue;
+	int negative = 0;
+	
+	/* Handle negative numbers for base 10 */
+	if (value < 0 && base == 10) {
+		negative = 1;
+		uvalue = (unsigned int)(-value);
+	} else {
+		uvalue = (unsigned int)value;
+	}
+	
+	/* Generate digits in reverse */
+	do {
+		unsigned int digit = uvalue % base;
+		*p++ = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+		uvalue /= base;
+	} while (uvalue > 0);
+	
+	/* Add negative sign */
+	if (negative) {
+		*p++ = '-';
+	}
+	
+	/* Null terminate */
+	*p = '\0';
+	
+	/* Reverse the string */
+	p1 = buf;
+	p2 = p - 1;
+	while (p1 < p2) {
+		char tmp = *p1;
+		*p1++ = *p2;
+		*p2-- = tmp;
+	}
+	
+	return buf;
+}
