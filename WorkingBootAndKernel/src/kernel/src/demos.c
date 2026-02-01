@@ -609,6 +609,10 @@ void run_usermode_password_demo(void) {
     /* Print newline */
     p = emit_print(p, s_nl, s_nl_len);
     
+    /* Check if choice is '3' (exit) - skip username/password prompts */
+    *p++ = 0x41; *p++ = 0x80; *p++ = 0xFC; *p++ = '3'; /* cmp r12b, '3' */
+    *p++ = 0x0F; *p++ = 0x84; uint8_t *jexit_early = p; p += 4; /* je near exit (32-bit) */
+    
     /* Print "Username: " */
     p = emit_print(p, s_user, s_user_len);
     
@@ -674,7 +678,8 @@ void run_usermode_password_demo(void) {
     *p++ = 0x74; uint8_t *jlogin = p; *p++ = 0x00;
     *p++ = 0x41; *p++ = 0x80; *p++ = 0xFC; *p++ = '2'; /* cmp r12b, '2' */
     *p++ = 0x74; uint8_t *jreg = p; *p++ = 0x00;
-    *p++ = 0xEB; uint8_t *jexit1 = p; *p++ = 0x00; /* jmp exit */
+    /* jmp near exit (use 32-bit relative jump since exit is far) */
+    *p++ = 0xE9; uint8_t *jexit1 = p; p += 4; /* jmp rel32 */
     
     /* Login: */
     *jlogin = (uint8_t)(p - jlogin - 1);
@@ -685,11 +690,13 @@ void run_usermode_password_demo(void) {
     *p++ = 0x75; uint8_t *jfail = p; *p++ = 0x00; /* jne fail */
     /* success: */
     p = emit_print(p, s_ok, s_ok_len);
-    *p++ = 0xEB; uint8_t *jexit2 = p; *p++ = 0x00;
+    /* jmp near exit */
+    *p++ = 0xE9; uint8_t *jexit2 = p; p += 4;
     /* fail: */
     *jfail = (uint8_t)(p - jfail - 1);
     p = emit_print(p, s_fail, s_fail_len);
-    *p++ = 0xEB; uint8_t *jexit3 = p; *p++ = 0x00;
+    /* jmp near exit */
+    *p++ = 0xE9; uint8_t *jexit3 = p; p += 4;
     
     /* Register: */
     *jreg = (uint8_t)(p - jreg - 1);
@@ -702,16 +709,46 @@ void run_usermode_password_demo(void) {
     p = emit_mov64(p, 6, pbuf);
     p = emit_syscall_only(p, 11); /* SYS_PASS_STORE */
     p = emit_print(p, s_reg, s_reg_len);
-    *p++ = 0xEB; uint8_t *jexit4 = p; *p++ = 0x00;
+    /* jmp near exit */
+    *p++ = 0xE9; uint8_t *jexit4 = p; p += 4;
     /* exists: */
     *jexists = (uint8_t)(p - jexists - 1);
     p = emit_print(p, s_exists, s_exists_len);
     
-    /* Exit: */
-    *jexit1 = (uint8_t)(p - jexit1 - 1);
-    *jexit2 = (uint8_t)(p - jexit2 - 1);
-    *jexit3 = (uint8_t)(p - jexit3 - 1);
-    *jexit4 = (uint8_t)(p - jexit4 - 1);
+    /* Exit: (fall through from exists, or jump here) */
+    uint8_t *exit_label = p;
+    /* Patch all near jumps to exit */
+    {
+        int32_t off_early = (int32_t)(exit_label - (jexit_early + 4));
+        jexit_early[0] = off_early & 0xFF;
+        jexit_early[1] = (off_early >> 8) & 0xFF;
+        jexit_early[2] = (off_early >> 16) & 0xFF;
+        jexit_early[3] = (off_early >> 24) & 0xFF;
+        
+        int32_t off1 = (int32_t)(exit_label - (jexit1 + 4));
+        jexit1[0] = off1 & 0xFF;
+        jexit1[1] = (off1 >> 8) & 0xFF;
+        jexit1[2] = (off1 >> 16) & 0xFF;
+        jexit1[3] = (off1 >> 24) & 0xFF;
+        
+        int32_t off2 = (int32_t)(exit_label - (jexit2 + 4));
+        jexit2[0] = off2 & 0xFF;
+        jexit2[1] = (off2 >> 8) & 0xFF;
+        jexit2[2] = (off2 >> 16) & 0xFF;
+        jexit2[3] = (off2 >> 24) & 0xFF;
+        
+        int32_t off3 = (int32_t)(exit_label - (jexit3 + 4));
+        jexit3[0] = off3 & 0xFF;
+        jexit3[1] = (off3 >> 8) & 0xFF;
+        jexit3[2] = (off3 >> 16) & 0xFF;
+        jexit3[3] = (off3 >> 24) & 0xFF;
+        
+        int32_t off4 = (int32_t)(exit_label - (jexit4 + 4));
+        jexit4[0] = off4 & 0xFF;
+        jexit4[1] = (off4 >> 8) & 0xFF;
+        jexit4[2] = (off4 >> 16) & 0xFF;
+        jexit4[3] = (off4 >> 24) & 0xFF;
+    }
     p = emit_print(p, s_bye, s_bye_len);
     p = emit_syscall_only(p, 1); /* SYSCALL_TEST - returns to kernel */
     *p++ = 0xEB; *p++ = 0xFE; /* infinite loop fallback */
