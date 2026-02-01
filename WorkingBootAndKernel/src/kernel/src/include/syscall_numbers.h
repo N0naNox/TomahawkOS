@@ -12,3 +12,6 @@
 #define SYS_PASS_VERIFY 10
 #define SYS_PASS_STORE 11
 #define SYS_PASS_EXISTS 12
+#define SYS_WRITE 13
+#define SYS_GETCHAR 14
+#define SYS_PUTCHAR 15

@@ -46,7 +46,8 @@ typedef enum {
 	DEMO_TESTS = 4,
 	DEMO_USERMODE = 5,
 	DEMO_VFS = 6,
-	DEMO_PASSWORD = 7
+	DEMO_PASSWORD = 7,
+	DEMO_USERMODE_PASSWORD = 8
 } demo_mode_t;
 
 static demo_mode_t select_demo(void);
@@ -262,7 +263,7 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 }
 
 static demo_mode_t select_demo(void) {
-	uart_puts("[SELECT] Waiting for demo selection (1-6)...\n");
+	uart_puts("[SELECT] Waiting for demo selection (1-8)...\n");
 	while (1) {
 		char c = keyboard_getchar();
 		if (c == '1') {
@@ -292,6 +293,10 @@ static demo_mode_t select_demo(void) {
 		else if (c == '7') {
 			uart_puts("[SELECT] Selected: 7\n");
 			return DEMO_PASSWORD;
+		}
+		else if (c == '8') {
+			uart_puts("[SELECT] Selected: 8\n");
+			return DEMO_USERMODE_PASSWORD;
 		}
 		/* Silently ignore all other characters (including garbage) */
 	}
@@ -516,7 +521,7 @@ static void menu_thread(void) {
 		keyboard_flush();
 		/* Clear screen and prompt */
 		vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests, 5=usermode, 6=vfs, 7=password\n");
+		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests, 5=usermode, 6=vfs, 7=password, 8=usermode-password\n");
 		vga_write("Select demo:\n");
 		vga_write("  1) Keyboard echo (ESC to stop)\n");
 		vga_write("  2) Scheduler threads (ESC to stop)\n");
@@ -524,9 +529,10 @@ static void menu_thread(void) {
 		vga_write("  4) Run Kernel Unit Tests (ESC to stop)\n");
 		vga_write("  5) Jump to User Mode (Ring 3 Test)\n");
 		vga_write("  6) VFS Test (Virtual File System)\n");
-		vga_write("  7) Password Store Demo\n");
+		vga_write("  7) Password Store Demo (Kernel Mode)\n");
+		vga_write("  8) Password Store Demo (User Mode/Ring 3)\n");
 		vga_write("\n  Press F12 to shutdown\n");
-		vga_write("Press 1-7...\n");
+		vga_write("Press 1-8...\n");
 
 		demo_mode_t mode = select_demo();
 
@@ -554,6 +560,9 @@ static void menu_thread(void) {
 		}
 		else if (mode == DEMO_PASSWORD) {
 			run_password_demo();
+		}
+		else if (mode == DEMO_USERMODE_PASSWORD) {
+			run_usermode_password_demo();
 		}
 		else {
 			run_echo_demo();
