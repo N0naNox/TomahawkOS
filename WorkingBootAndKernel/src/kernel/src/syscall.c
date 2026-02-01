@@ -154,31 +154,28 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         case SYS_GETCHAR:
-            /* Read a character from keyboard using polling (interrupts may be disabled) */
+            /* Read a character from keyboard using direct polling only */
+            /* (keyboard interrupt is masked, so we don't check the buffer) */
             {
+                static const char scancode_map[128] = {
+                    0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
+                    'q','w','e','r','t','y','u','i','o','p','[',']','\n', 0, 'a','s',
+                    'd','f','g','h','j','k','l',';','\'','`', 0,'\\','z','x','c','v',
+                    'b','n','m',',','.','/', 0, '*', 0, ' ', 0, 0, 0, 0, 0, 0,
+                };
                 char c = 0;
-                /* Use direct keyboard polling since interrupts are disabled during syscall */
                 while (!c) {
-                    /* First check if there's already a char in the buffer */
-                    c = keyboard_getchar();
-                    if (!c) {
-                        /* Poll the keyboard controller directly */
-                        if (hal_inb(0x64) & 0x01) {
-                            uint8_t scancode = hal_inb(0x60);
-                            /* Ignore break codes */
-                            if (!(scancode & 0x80)) {
-                                /* Simple scancode to ASCII (scancode set 1) */
-                                static const char scancode_map[128] = {
-                                    0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
-                                    'q','w','e','r','t','y','u','i','o','p','[',']','\n', 0, 'a','s',
-                                    'd','f','g','h','j','k','l',';','\'','`', 0,'\\','z','x','c','v',
-                                    'b','n','m',',','.','/', 0, '*', 0, ' ', 0, 0, 0, 0, 0, 0,
-                                };
-                                if (scancode < sizeof(scancode_map)) {
-                                    c = scancode_map[scancode];
-                                }
+                    /* Poll the keyboard controller directly */
+                    if (hal_inb(0x64) & 0x01) {
+                        uint8_t scancode = hal_inb(0x60);
+                        /* Ignore break codes (key release, bit 7 set) */
+                        if (!(scancode & 0x80)) {
+                            if (scancode < sizeof(scancode_map)) {
+                                c = scancode_map[scancode];
                             }
                         }
+                    }
+                    if (!c) {
                         __asm__ volatile("pause");
                     }
                 }

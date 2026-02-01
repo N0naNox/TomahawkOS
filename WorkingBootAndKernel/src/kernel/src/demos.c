@@ -748,9 +748,14 @@ void run_usermode_password_demo(void) {
         return;
     }
     
-    /* Mask timer before entering user mode */
+    /* Mask timer AND keyboard before entering user mode - we'll use polling only */
     uint8_t pic_mask = hal_inb(0x21);
-    hal_outb(0x21, pic_mask | 0x01);
+    hal_outb(0x21, pic_mask | 0x03);  /* IRQ0=timer, IRQ1=keyboard */
+    
+    /* Flush any pending keyboard data */
+    while (hal_inb(0x64) & 0x01) {
+        hal_inb(0x60);  /* discard */
+    }
     
     /* Jump to Ring 3 */
     uint64_t user_ss = 0x1B;
