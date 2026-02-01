@@ -40,11 +40,19 @@ syscall_entry:
     
     ; Call handler: syscall_handler_c(num, arg1, arg2, arg3, regs)
     ; System V ABI: RDI, RSI, RDX, RCX, R8, R9
-    mov r8, rsp     ; regs_t* as 5th arg
-    mov rcx, r10    ; arg3 (r10 is used instead of rcx in syscall)
-    ; rdx already has arg2
-    ; rsi already has arg1  
-    mov rdi, rax    ; syscall number
+    ; User syscall convention: RAX=num, RDI=arg1, RSI=arg2, RDX=arg3, R10=arg4
+    ; We need to shuffle: C_RDI=RAX, C_RSI=user_RDI, C_RDX=user_RSI, C_RCX=user_RDX
+    
+    ; Save user args before shuffling (they're on stack in regs_t)
+    ; regs_t: [rax, rbx, rcx, rdx, rsi, rdi, ...]
+    ;          0    8    16   24   32   40
+    mov r8, rsp             ; regs_t* as 5th arg
+    mov rcx, r10            ; arg4 (r10 is used instead of rcx for 4th arg in syscall)
+    mov r9, rdx             ; save user RDX (arg3) temporarily
+    mov rdx, rsi            ; C arg3 = user RSI (arg2)
+    mov rsi, rdi            ; C arg2 = user RDI (arg1)
+    mov rdi, rax            ; C arg1 = syscall number
+    mov rcx, r9             ; C arg4 = user RDX (arg3)
     
     call syscall_handler_c
     

@@ -8,6 +8,7 @@
 #include "include/idt.h"
 #include "include/hal_port_io.h"
 #include "include/keyboard.h"
+#include "include/password_store.h"
 #include "uart.h"
 
 /* External saved context from usermode demo */
@@ -15,6 +16,52 @@ extern volatile uint64_t usermode_demo_return_rsp;
 extern volatile uint64_t usermode_demo_return_rbp;
 extern volatile uint64_t usermode_demo_return_rip;
 extern volatile int usermode_demo_completed;
+
+/* External saved context from usermode password demo */
+extern volatile uint64_t usermode_pass_return_rsp;
+extern volatile uint64_t usermode_pass_return_rbp;
+extern volatile uint64_t usermode_pass_return_rip;
+extern volatile int usermode_pass_completed;
+
+/* Helper to return to kernel from usermode demo */
+static void return_to_kernel_demo(volatile uint64_t* rsp, volatile uint64_t* rbp, 
+                                   volatile uint64_t* rip, volatile int* completed) {
+    /* Poll keyboard directly for ESC - keep timer masked */
+    while (1) {
+        if (hal_inb(0x64) & 0x01) {
+            uint8_t scancode = hal_inb(0x60);
+            if (scancode == 0x01) {  /* ESC scancode */
+                break;
+            }
+        }
+        __asm__ volatile("pause");
+    }
+    
+    /* Flush any remaining scancodes */
+    while (hal_inb(0x64) & 0x01) {
+        hal_inb(0x60);
+    }
+    
+    /* Restore timer and keyboard IRQs */
+    uint8_t pic_mask = hal_inb(0x21);
+    pic_mask &= ~0x01;  /* Unmask IRQ0 (timer) */
+    pic_mask &= ~0x02;  /* Unmask IRQ1 (keyboard) */
+    hal_outb(0x21, pic_mask);
+    
+    __asm__ volatile("sti");
+    
+    *completed = 1;
+    
+    __asm__ volatile("swapgs");
+    
+    __asm__ volatile(
+        "mov %0, %%rsp\n"
+        "mov %1, %%rbp\n"
+        "jmp *%2\n"
+        :
+        : "r"(*rsp), "r"(*rbp), "r"(*rip)
+    );
+}
 
 /* Extended syscall handler with more arguments */
 uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, uint64_t arg3, regs_t* regs) 
@@ -36,47 +83,14 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                 ::: "ax"
             );
             
-            /* Poll keyboard directly for ESC - keep timer masked */
-            while (1) {
-                if (hal_inb(0x64) & 0x01) {
-                    uint8_t scancode = hal_inb(0x60);
-                    if (scancode == 0x01) {  /* ESC scancode */
-                        break;
-                    }
-                }
-                __asm__ volatile("pause");
+            /* Determine which demo to return to based on which has valid return address */
+            if (usermode_pass_return_rip != 0 && !usermode_pass_completed) {
+                return_to_kernel_demo(&usermode_pass_return_rsp, &usermode_pass_return_rbp,
+                                      &usermode_pass_return_rip, (volatile int*)&usermode_pass_completed);
+            } else {
+                return_to_kernel_demo(&usermode_demo_return_rsp, &usermode_demo_return_rbp,
+                                      &usermode_demo_return_rip, (volatile int*)&usermode_demo_completed);
             }
-            
-            /* Flush any remaining scancodes from keyboard controller */
-            while (hal_inb(0x64) & 0x01) {
-                hal_inb(0x60);  /* Discard */
-            }
-            
-            /* Restore timer interrupt AND ensure keyboard IRQ is unmasked */
-            uint8_t pic_mask = hal_inb(0x21);
-            pic_mask &= ~0x01;  /* Unmask IRQ0 (timer) */
-            pic_mask &= ~0x02;  /* Unmask IRQ1 (keyboard) */
-            hal_outb(0x21, pic_mask);
-            
-            /* Re-enable interrupts */
-            __asm__ volatile("sti");
-            
-            /* Mark demo as completed */
-            usermode_demo_completed = 1;
-            
-            /* CRITICAL: We're bypassing the normal syscall return path which does swapgs.
-             * We must do swapgs here to restore GS bases to the correct state,
-             * otherwise the next syscall will fail because GS won't point to cpu_info. */
-            __asm__ volatile("swapgs");
-            
-            /* Jump back to saved context in run_usermode_demo */
-            __asm__ volatile(
-                "mov %0, %%rsp\n"
-                "mov %1, %%rbp\n"
-                "jmp *%2\n"
-                :
-                : "r"(usermode_demo_return_rsp), "r"(usermode_demo_return_rbp), "r"(usermode_demo_return_rip)
-            );
             
             /* Never reached */
             return 0;
@@ -102,6 +116,100 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_SIGRETURN:
             return (uint64_t)signal_return(get_current_process(), regs);
+
+        case SYS_PASS_VERIFY:
+            /* arg1 = username, arg2 = password */
+            return (uint64_t)password_store_verify((const char*)arg1, (const char*)arg2);
+
+        case SYS_PASS_STORE:
+            /* arg1 = username, arg2 = password */
+            return (uint64_t)password_store_add((const char*)arg1, (const char*)arg2);
+
+        case SYS_PASS_EXISTS:
+            /* arg1 = username */
+            return (uint64_t)password_store_user_exists((const char*)arg1);
+
+        case SYS_WRITE:
+            /* arg1 = string pointer, arg2 = length */
+            /* Debug: print addr and len via UART */
+            uart_puts("[SYS_WRITE] str=0x");
+            uart_puthex((uint64_t)arg1);
+            uart_puts(" len=");
+            uart_putu((uint64_t)arg2);
+            uart_puts("\n");
+            if (arg1 && arg2) {
+                const char *str = (const char*)arg1;
+                size_t len = (size_t)arg2;
+                /* Debug: print first few bytes in hex */
+                uart_puts("  first bytes: ");
+                for (size_t i = 0; i < 8 && i < len; i++) {
+                    uart_puthex((uint8_t)str[i]);
+                    uart_puts(" ");
+                }
+                uart_puts("\n");
+                for (size_t i = 0; i < len; i++) {
+                    vga_putc(str[i]);
+                }
+            }
+            return 0;
+
+        case SYS_GETCHAR:
+            /* Read a character from keyboard using direct polling only */
+            /* (keyboard interrupt is masked, so we don't check the buffer) */
+            {
+                static const char scancode_map[128] = {
+                    0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
+                    'q','w','e','r','t','y','u','i','o','p','[',']','\n', 0, 'a','s',
+                    'd','f','g','h','j','k','l',';','\'','`', 0,'\\','z','x','c','v',
+                    'b','n','m',',','.','/', 0, '*', 0, ' ', 0, 0, 0, 0, 0, 0,
+                };
+                char c = 0;
+                while (!c) {
+                    /* Poll the keyboard controller directly */
+                    if (hal_inb(0x64) & 0x01) {
+                        uint8_t scancode = hal_inb(0x60);
+                        /* Ignore break codes (key release, bit 7 set) */
+                        if (!(scancode & 0x80)) {
+                            if (scancode < sizeof(scancode_map)) {
+                                c = scancode_map[scancode];
+                            }
+                        }
+                    }
+                    if (!c) {
+                        __asm__ volatile("pause");
+                    }
+                }
+                return (uint64_t)(unsigned char)c;
+            }
+
+        case SYS_PUTCHAR:
+            /* arg1 = character to print */
+            vga_putc((char)arg1);
+            return 0;
+
+        case 99:
+            /* Exit from usermode password demo - return to kernel */
+            __asm__ volatile(
+                "mov $0x10, %%ax\n"
+                "mov %%ax, %%ds\n"
+                "mov %%ax, %%es\n"
+                "mov %%ax, %%fs\n"
+                ::: "ax"
+            );
+            
+            if (usermode_pass_return_rip != 0 && !usermode_pass_completed) {
+                /* Don't wait for ESC - return immediately */
+                usermode_pass_completed = 1;
+                __asm__ volatile("swapgs");
+                __asm__ volatile(
+                    "mov %0, %%rsp\n"
+                    "mov %1, %%rbp\n"
+                    "jmp *%2\n"
+                    :
+                    : "r"(usermode_pass_return_rsp), "r"(usermode_pass_return_rbp), "r"(usermode_pass_return_rip)
+                );
+            }
+            return 0;
 
         default:
             uart_puts("[KERNEL] Unknown syscall\n");

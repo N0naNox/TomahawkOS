@@ -24,4 +24,7 @@ void run_usermode_demo(void);
 /* Run VFS demo */
 void run_vfs_demo(void);
 
+/* Run user mode password demo - uses syscalls from Ring 3 */
+void run_usermode_password_demo(void);
+
 #endif /* DEMOS_H */

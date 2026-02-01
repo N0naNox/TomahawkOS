@@ -29,6 +29,7 @@
 #include "include/signal.h"
 #include "include/tests.h"
 #include "include/demos.h"
+#include "include/password_store.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -44,7 +45,8 @@ typedef enum {
 	DEMO_COW_SIGNALS = 3,
 	DEMO_TESTS = 4,
 	DEMO_USERMODE = 5,
-	DEMO_VFS = 6
+	DEMO_VFS = 6,
+	DEMO_USERMODE_PASSWORD = 7
 } demo_mode_t;
 
 static demo_mode_t select_demo(void);
@@ -193,6 +195,9 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	 * for accessing physical frames returned by pfa_alloc_frame().
 	 * TODO: Implement a proper physical memory mapping window instead of full identity map. */
 
+	/* Initialize password store */
+	password_store_init();
+
 	/* Initialize user syscall machinery */
 	syscall_init();
 
@@ -256,7 +261,7 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 }
 
 static demo_mode_t select_demo(void) {
-	uart_puts("[SELECT] Waiting for demo selection (1-6)...\n");
+	uart_puts("[SELECT] Waiting for demo selection (1-8)...\n");
 	while (1) {
 		char c = keyboard_getchar();
 		if (c == '1') {
@@ -282,6 +287,10 @@ static demo_mode_t select_demo(void) {
 		else if (c == '6') {
 			uart_puts("[SELECT] Selected: 6\n");
 			return DEMO_VFS;
+		}
+		else if (c == '7') {
+			uart_puts("[SELECT] Selected: 7\n");
+			return DEMO_USERMODE_PASSWORD;
 		}
 		/* Silently ignore all other characters (including garbage) */
 	}
@@ -365,12 +374,78 @@ static void run_scheduler_demo(void) {
 	}
 }
 
+/* Helper to read a line of input from keyboard */
+static int read_line(char* buffer, int max_len) {
+	int pos = 0;
+	while (pos < max_len - 1) {
+		char c = keyboard_getchar();
+		if (!c) {
+			__asm__ volatile("pause");
+			continue;
+		}
+		if (c == '\n' || c == '\r') {
+			buffer[pos] = '\0';
+			vga_putc('\n');
+			return pos;
+		}
+		if (c == '\b' || c == 127) {
+			if (pos > 0) {
+				pos--;
+				vga_write("\b \b");
+			}
+			continue;
+		}
+		if (c == 27) { /* ESC */
+			return -1;
+		}
+		if (c >= 32 && c < 127) {
+			buffer[pos++] = c;
+			vga_putc(c);
+		}
+	}
+	buffer[pos] = '\0';
+	return pos;
+}
+
+/* Helper to read password (no echo) */
+static int read_password(char* buffer, int max_len) {
+	int pos = 0;
+	while (pos < max_len - 1) {
+		char c = keyboard_getchar();
+		if (!c) {
+			__asm__ volatile("pause");
+			continue;
+		}
+		if (c == '\n' || c == '\r') {
+			buffer[pos] = '\0';
+			vga_putc('\n');
+			return pos;
+		}
+		if (c == '\b' || c == 127) {
+			if (pos > 0) {
+				pos--;
+				vga_write("\b \b");
+			}
+			continue;
+		}
+		if (c == 27) { /* ESC */
+			return -1;
+		}
+		if (c >= 32 && c < 127) {
+			buffer[pos++] = c;
+			vga_putc('*'); /* Show asterisk instead of actual char */
+		}
+	}
+	buffer[pos] = '\0';
+	return pos;
+}
+
 static void menu_thread(void) {
 	for (;;) {
 		keyboard_flush();
 		/* Clear screen and prompt */
 		vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests, 5=usermode, 6=vfs\n");
+		uart_puts("Select demo: 1=echo, 2=scheduler, 3=COW+signals, 4=tests, 5=usermode, 6=vfs, 7=password\n");
 		vga_write("Select demo:\n");
 		vga_write("  1) Keyboard echo (ESC to stop)\n");
 		vga_write("  2) Scheduler threads (ESC to stop)\n");
@@ -378,8 +453,9 @@ static void menu_thread(void) {
 		vga_write("  4) Run Kernel Unit Tests (ESC to stop)\n");
 		vga_write("  5) Jump to User Mode (Ring 3 Test)\n");
 		vga_write("  6) VFS Test (Virtual File System)\n");
+		vga_write("  7) Password Store Demo (User Mode/Ring 3)\n");
 		vga_write("\n  Press F12 to shutdown\n");
-		vga_write("Press 1-6...\n");
+		vga_write("Press 1-7...\n");
 
 		demo_mode_t mode = select_demo();
 
@@ -404,6 +480,9 @@ static void menu_thread(void) {
 		}
 		else if (mode == DEMO_VFS) {
 			run_vfs_demo();
+		}
+		else if (mode == DEMO_USERMODE_PASSWORD) {
+			run_usermode_password_demo();
 		}
 		else {
 			run_echo_demo();

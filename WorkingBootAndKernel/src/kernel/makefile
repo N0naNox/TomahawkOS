@@ -67,7 +67,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/tests.c \
 	${SRC_DIR}/demos.c \
 	${SRC_DIR}/sys_proc.c \
-	${SRC_DIR}/vfs.c
+	${SRC_DIR}/vfs.c \
+	${SRC_DIR}/password_store.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})
