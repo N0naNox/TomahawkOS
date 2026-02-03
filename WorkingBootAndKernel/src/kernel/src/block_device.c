@@ -176,27 +176,19 @@ static struct buffer_head *buffer_alloc(void) {
 /* ========== Buffer Cache Implementation ========== */
 
 void buffer_cache_init(void) {
-    /* Allocate data pool - one page per buffer */
-    size_t pool_size = BUFFER_CACHE_SIZE * BLOCK_SIZE;
-    size_t pages_needed = (pool_size + 4095) / 4096;
-    
-    buffer_data_pool = NULL;
-    for (size_t i = 0; i < pages_needed; i++) {
+    /* Initialize buffer pool - allocate one page per buffer */
+    for (int i = 0; i < BUFFER_CACHE_SIZE; i++) {
         uint64_t frame = pfa_alloc_frame();
         if (!frame) {
-            uart_puts("[BLOCK] ERROR: Failed to allocate buffer pool\n");
+            uart_puts("[BLOCK] ERROR: Failed to allocate buffer ");
+            uart_putu(i);
+            uart_puts("\n");
             return;
         }
-        if (!buffer_data_pool) {
-            buffer_data_pool = (uint8_t *)frame;
-        }
-    }
-    
-    /* Initialize buffer pool */
-    for (int i = 0; i < BUFFER_CACHE_SIZE; i++) {
+        
         buffer_pool[i].dev = NULL;
         buffer_pool[i].block_num = 0;
-        buffer_pool[i].data = buffer_data_pool + (i * BLOCK_SIZE);
+        buffer_pool[i].data = (uint8_t *)frame;  /* Each buffer gets its own page */
         buffer_pool[i].flags = 0;
         buffer_pool[i].ref_count = 0;
         buffer_pool[i].hash_next = (i < BUFFER_CACHE_SIZE - 1) ? &buffer_pool[i + 1] : NULL;
@@ -205,6 +197,7 @@ void buffer_cache_init(void) {
     }
     
     free_buffers = &buffer_pool[0];
+    buffer_data_pool = buffer_pool[0].data;  /* Just for reference */
     
     /* Clear hash table */
     for (int i = 0; i < BUFFER_HASH_SIZE; i++) {
