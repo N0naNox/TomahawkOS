@@ -177,3 +177,26 @@ int password_store_get_count(void) {
     if (!initialized) password_store_init();
     return user_count;
 }
+
+int password_store_get_uid(const char* username) {
+    if (!username) return -1;
+    if (!initialized) password_store_init();
+    return find_user(username);
+}
+
+int password_store_get_username(int uid, char* buf, int buf_size) {
+    if (!buf || buf_size <= 0) return -1;
+    if (!initialized) password_store_init();
+    if (uid < 0 || uid >= MAX_USERS || !user_db[uid].used) {
+        buf[0] = '\0';
+        return -1;
+    }
+    
+    /* Copy username to buffer */
+    int i = 0;
+    for (; i < buf_size - 1 && user_db[uid].username[i]; i++) {
+        buf[i] = user_db[uid].username[i];
+    }
+    buf[i] = '\0';
+    return 0;
+}

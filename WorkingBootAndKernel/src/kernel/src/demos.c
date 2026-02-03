@@ -676,24 +676,27 @@ static uint8_t *emit_print(uint8_t *p, uint64_t str_addr, uint64_t len) {
     return p;
 }
 
-void run_usermode_password_demo(void) {
-    vga_write("=== User Mode Password Demo (Ring 3) ===\n\n");
-    vga_write("This demo runs a password program in Ring 3 user mode.\n");
-    vga_write("It uses syscalls for I/O and password operations.\n\n");
+/* ========== Tomahawk Shell ========== */
+
+void run_tomahawk_shell(void) {
+    vga_write("=== Tomahawk Shell ===\n\n");
+    vga_write("Starting interactive shell in Ring 3...\n\n");
     
-    /* Memory layout */
-    #define UPASS_CODE   0x40000000ULL
-    #define UPASS_DATA   0x40001000ULL
-    #define UPASS_BUF    0x40002000ULL
-    #define UPASS_STACK  0x40004000ULL
+    /* Memory layout - need more code space for shell */
+    #define SHELL_CODE   0x40000000ULL
+    #define SHELL_CODE2  0x40001000ULL  /* Second code page */
+    #define SHELL_DATA   0x40002000ULL
+    #define SHELL_BUF    0x40003000ULL
+    #define SHELL_STACK  0x40005000ULL
     
     /* Allocate frames */
     uint64_t code_frame = pfa_alloc_frame();
+    uint64_t code2_frame = pfa_alloc_frame();
     uint64_t data_frame = pfa_alloc_frame();
     uint64_t buf_frame = pfa_alloc_frame();
     uint64_t stack_frame = pfa_alloc_frame();
     
-    if (!code_frame || !data_frame || !buf_frame || !stack_frame) {
+    if (!code_frame || !code2_frame || !data_frame || !buf_frame || !stack_frame) {
         vga_write("ERROR: Failed to allocate frames.\n");
         return;
     }
@@ -702,238 +705,594 @@ void run_usermode_password_demo(void) {
     uintptr_t cr3 = paging_get_current_cr3();
     uint64_t flags = PTE_PRESENT | PTE_RW | PTE_USER;
     
-    paging_map_page(cr3, UPASS_CODE, code_frame, flags);
-    paging_map_page(cr3, UPASS_DATA, data_frame, flags);
-    paging_map_page(cr3, UPASS_BUF, buf_frame, flags);
-    paging_map_page(cr3, UPASS_STACK - 0x1000, stack_frame, flags);
+    paging_map_page(cr3, SHELL_CODE, code_frame, flags);
+    paging_map_page(cr3, SHELL_CODE2, code2_frame, flags);
+    paging_map_page(cr3, SHELL_DATA, data_frame, flags);
+    paging_map_page(cr3, SHELL_BUF, buf_frame, flags);
+    paging_map_page(cr3, SHELL_STACK - 0x1000, stack_frame, flags);
     
     /* Flush TLB */
-    __asm__ volatile("invlpg (%0)" :: "r"(UPASS_CODE) : "memory");
-    __asm__ volatile("invlpg (%0)" :: "r"(UPASS_DATA) : "memory");
-    __asm__ volatile("invlpg (%0)" :: "r"(UPASS_BUF) : "memory");
-    __asm__ volatile("invlpg (%0)" :: "r"(UPASS_STACK - 0x1000) : "memory");
+    __asm__ volatile("invlpg (%0)" :: "r"(SHELL_CODE) : "memory");
+    __asm__ volatile("invlpg (%0)" :: "r"(SHELL_CODE2) : "memory");
+    __asm__ volatile("invlpg (%0)" :: "r"(SHELL_DATA) : "memory");
+    __asm__ volatile("invlpg (%0)" :: "r"(SHELL_BUF) : "memory");
+    __asm__ volatile("invlpg (%0)" :: "r"(SHELL_STACK - 0x1000) : "memory");
     
-    /* Kernel access pointers (physical = virtual for low addresses in identity map) */
+    /* Kernel access pointers */
     uint8_t *code_ptr = (uint8_t *)code_frame;
+    uint8_t *code2_ptr = (uint8_t *)code2_frame;
     uint8_t *data_ptr = (uint8_t *)data_frame;
     
     /* Clear pages */
     for (int i = 0; i < 4096; i++) {
         code_ptr[i] = 0;
+        code2_ptr[i] = 0;
         data_ptr[i] = 0;
     }
     
     /* Setup strings in data page */
     size_t off = 0;
     
-    /* Helper macro to place string at offset and track location */
     #define PLACE_STR(name, text) \
-        uint64_t name = UPASS_DATA + off; \
+        uint64_t name = SHELL_DATA + off; \
         size_t name##_len = sizeof(text) - 1; \
         { const char *s = text; for (size_t _i = 0; s[_i]; _i++) data_ptr[off++] = s[_i]; data_ptr[off++] = 0; }
 
-    PLACE_STR(s_menu, "\n=== Password Menu ===\n1. Login\n2. Register\n3. Exit\nChoice: ")
+    PLACE_STR(s_banner, "\n"
+        "  _____                    _                 _    \n"
+        " |_   _|__  _ __ ___   __ _| |__   __ ___      _| | __\n"
+        "   | |/ _ \\| '_ ` _ \\ / _` | '_ \\ / _` \\ \\ /\\ / / |/ /\n"
+        "   | | (_) | | | | | | (_| | | | | (_| |\\ V  V /|   < \n"
+        "   |_|\\___/|_| |_| |_|\\__,_|_| |_|\\__,_| \\_/\\_/ |_|\\_\\\n"
+        "                                          Shell v1.0\n\n")
+    PLACE_STR(s_help, "Available commands:\n"
+        "  help     - Show this help message\n"
+        "  login    - Log in with username and password\n"
+        "  register - Create a new user account\n"
+        "  logout   - Log out current user\n"
+        "  whoami   - Show current user\n"
+        "  clear    - Clear the screen\n"
+        "  exit     - Exit shell and return to kernel\n\n")
+    PLACE_STR(s_prompt_guest, "guest@tomahawk> ")
+    PLACE_STR(s_prompt_at, "@tomahawk> ")
     PLACE_STR(s_user, "Username: ")
     PLACE_STR(s_pass, "Password: ")
-    PLACE_STR(s_ok, "\n[OK] Login successful!\n")
-    PLACE_STR(s_fail, "\n[FAIL] Invalid credentials.\n")
-    PLACE_STR(s_reg, "\n[OK] User registered!\n")
-    PLACE_STR(s_exists, "\n[FAIL] User already exists.\n")
-    PLACE_STR(s_bye, "\nReturning to kernel...\n")
+    PLACE_STR(s_login_ok, "\n[OK] Login successful! Welcome, ")
+    PLACE_STR(s_login_fail, "\n[FAIL] Invalid username or password.\n")
+    PLACE_STR(s_reg_ok, "\n[OK] User registered successfully!\n")
+    PLACE_STR(s_reg_exists, "\n[FAIL] Username already exists.\n")
+    PLACE_STR(s_logout_ok, "[OK] Logged out.\n")
+    PLACE_STR(s_not_logged, "[INFO] Not logged in.\n")
+    PLACE_STR(s_already_logged, "[INFO] Already logged in. Logout first.\n")
+    PLACE_STR(s_unknown, "[ERROR] Unknown command. Type 'help' for available commands.\n")
+    PLACE_STR(s_bye, "\nGoodbye! Returning to kernel...\n")
     PLACE_STR(s_nl, "\n")
+    PLACE_STR(s_cmd_help, "help")
+    PLACE_STR(s_cmd_login, "login")
+    PLACE_STR(s_cmd_register, "register")
+    PLACE_STR(s_cmd_logout, "logout")
+    PLACE_STR(s_cmd_whoami, "whoami")
+    PLACE_STR(s_cmd_clear, "clear")
+    PLACE_STR(s_cmd_exit, "exit")
     
     #undef PLACE_STR
     
-    /* Debug: show frame addresses and virtual addresses */
-    uart_puts("[DEMO] data_frame=0x");
-    uart_puthex(data_frame);
-    uart_puts(" s_menu=0x");
-    uart_puthex(s_menu);
-    uart_puts(" s_menu_len=");
-    uart_putu(s_menu_len);
-    uart_puts("\n");
+    uint64_t cmdbuf = SHELL_BUF;        /* command buffer */
+    uint64_t userbuf = SHELL_BUF + 128; /* username buffer */
+    uint64_t passbuf = SHELL_BUF + 192; /* password buffer */
+    uint64_t namebuf = SHELL_BUF + 256; /* current username buffer */
     
-    /* Debug: Verify data was written - read first few bytes directly from frame */
-    uart_puts("[DEMO] Data in frame: ");
-    for (int i = 0; i < 10; i++) {
-        uart_puthex(data_ptr[i]);
-        uart_puts(" ");
-    }
-    uart_puts("\n");
-    
-    uint64_t ubuf = UPASS_BUF;        /* username buffer */
-    uint64_t pbuf = UPASS_BUF + 64;   /* password buffer */
-    
-    vga_write("Building user mode program...\n");
+    uart_puts("[SHELL] Generating shell code...\n");
     
     /* Generate code */
     uint8_t *p = code_ptr;
     
-    /* Print menu */
-    p = emit_print(p, s_menu, s_menu_len);
+    /* Print banner */
+    p = emit_print(p, s_banner, s_banner_len);
     
-    /* Get choice: syscall(14) -> rax */
-    p = emit_syscall_only(p, 14);
-    /* Save to r12 */
-    *p++ = 0x49; *p++ = 0x89; *p++ = 0xC4; /* mov r12, rax */
+    /* Print help */
+    p = emit_print(p, s_help, s_help_len);
     
-    /* Echo choice */
-    *p++ = 0x4C; *p++ = 0x89; *p++ = 0xE7; /* mov rdi, r12 */
+    /* ===== MAIN SHELL LOOP ===== */
+    uint8_t *shell_loop = p;
+    
+    /* Get current UID: syscall(16) */
+    p = emit_syscall_only(p, 16);  /* SYS_GETUID */
+    /* Store in r14 (current UID) */
+    *p++ = 0x49; *p++ = 0x89; *p++ = 0xC6; /* mov r14, rax */
+    
+    /* Check if logged in (r14 >= 0) */
+    *p++ = 0x49; *p++ = 0x83; *p++ = 0xFE; *p++ = 0x00; /* cmp r14, 0 */
+    *p++ = 0x7C; uint8_t *jguest = p; *p++ = 0x00; /* jl guest_prompt */
+    
+    /* Logged in - get username and print "username@tomahawk> " */
+    p = emit_mov64(p, 7, namebuf); /* rdi = buffer */
+    p = emit_mov64(p, 6, 32);      /* rsi = size */
+    p = emit_syscall_only(p, 18); /* SYS_GET_USERNAME */
+    
+    /* Print username (need strlen - just print char by char until null) */
+    p = emit_mov64(p, 13, namebuf); /* r13 = ptr */
+    uint8_t *print_name_loop = p;
+    /* mov al, [r13] */
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x45; *p++ = 0x00;
+    /* test al, al */
+    *p++ = 0x84; *p++ = 0xC0;
+    /* jz end_name */
+    *p++ = 0x74; uint8_t *end_name = p; *p++ = 0x00;
+    /* movzx rdi, al */
+    *p++ = 0x48; *p++ = 0x0F; *p++ = 0xB6; *p++ = 0xF8;
+    /* syscall(15) putchar */
     p = emit_syscall_only(p, 15);
-    
-    /* Print newline */
-    p = emit_print(p, s_nl, s_nl_len);
-    
-    /* Check if choice is '3' (exit) - skip username/password prompts */
-    *p++ = 0x41; *p++ = 0x80; *p++ = 0xFC; *p++ = '3'; /* cmp r12b, '3' */
-    *p++ = 0x0F; *p++ = 0x84; uint8_t *jexit_early = p; p += 4; /* je near exit (32-bit) */
-    
-    /* Print "Username: " */
-    p = emit_print(p, s_user, s_user_len);
-    
-    /* Read username into ubuf */
-    p = emit_mov64(p, 13, ubuf); /* r13 = buffer pointer */
-    
-    /* Loop: getchar, check enter, store, echo, repeat */
-    uint8_t *uloop = p;
-    p = emit_syscall_only(p, 14); /* getchar */
-    *p++ = 0x3C; *p++ = 0x0D; /* cmp al, 13 (CR) */
-    *p++ = 0x74; uint8_t *udone = p; *p++ = 0x00; /* je done */
-    *p++ = 0x3C; *p++ = 0x0A; /* cmp al, 10 (LF) */
-    *p++ = 0x74; uint8_t *udone2 = p; *p++ = 0x00; /* je done */
-    /* store: mov [r13], al */
-    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
     /* inc r13 */
     *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
-    /* echo: mov rdi, rax; syscall(15) */
-    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7;
-    p = emit_syscall_only(p, 15);
-    /* jmp uloop */
+    /* jmp loop */
     *p++ = 0xEB;
-    int8_t uloop_off = (int8_t)(uloop - p - 1);
-    *p++ = (uint8_t)uloop_off;
-    /* udone: */
-    *udone = (uint8_t)(p - udone - 1);
-    *udone2 = (uint8_t)(p - udone2 - 1);
+    int8_t name_loop_off = (int8_t)(print_name_loop - p - 1);
+    *p++ = (uint8_t)name_loop_off;
+    *end_name = (uint8_t)(p - end_name - 1);
+    
+    /* Print "@tomahawk> " */
+    p = emit_print(p, s_prompt_at, s_prompt_at_len);
+    *p++ = 0xEB; uint8_t *skip_guest = p; *p++ = 0x00; /* jmp read_cmd */
+    
+    /* guest_prompt: */
+    *jguest = (uint8_t)(p - jguest - 1);
+    p = emit_print(p, s_prompt_guest, s_prompt_guest_len);
+    
+    /* read_cmd: */
+    *skip_guest = (uint8_t)(p - skip_guest - 1);
+    
+    /* Read command line into cmdbuf */
+    p = emit_mov64(p, 13, cmdbuf); /* r13 = buffer */
+    p = emit_mov64(p, 15, cmdbuf); /* r15 = start of buffer (for length calc) */
+    
+    uint8_t *cmd_loop = p;
+    p = emit_syscall_only(p, 14); /* getchar */
+    *p++ = 0x3C; *p++ = 0x0D; /* cmp al, CR */
+    *p++ = 0x74; uint8_t *cmd_done = p; *p++ = 0x00;
+    *p++ = 0x3C; *p++ = 0x0A; /* cmp al, LF */
+    *p++ = 0x74; uint8_t *cmd_done2 = p; *p++ = 0x00;
+    /* Handle backspace */
+    *p++ = 0x3C; *p++ = 0x08; /* cmp al, backspace */
+    *p++ = 0x75; uint8_t *not_bs = p; *p++ = 0x00;
+    /* If at start of buffer, ignore */
+    *p++ = 0x4D; *p++ = 0x39; *p++ = 0xFD; /* cmp r13, r15 */
+    *p++ = 0x74; /* je cmd_loop */
+    int8_t bs_jmp = (int8_t)(cmd_loop - p - 1);
+    *p++ = (uint8_t)bs_jmp;
+    /* dec r13 */
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xCD;
+    /* print backspace, space, backspace to erase */
+    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x08; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    p = emit_syscall_only(p, 15);
+    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x20; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    p = emit_syscall_only(p, 15);
+    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x08; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    p = emit_syscall_only(p, 15);
+    *p++ = 0xEB;
+    int8_t bs_loop = (int8_t)(cmd_loop - p - 1);
+    *p++ = (uint8_t)bs_loop;
+    /* not backspace: */
+    *not_bs = (uint8_t)(p - not_bs - 1);
+    /* store char */
+    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00; /* mov [r13], al */
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5; /* inc r13 */
+    /* echo */
+    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7; /* mov rdi, rax */
+    p = emit_syscall_only(p, 15);
+    /* loop */
+    *p++ = 0xEB;
+    int8_t loop_off = (int8_t)(cmd_loop - p - 1);
+    *p++ = (uint8_t)loop_off;
+    /* cmd_done: */
+    *cmd_done = (uint8_t)(p - cmd_done - 1);
+    *cmd_done2 = (uint8_t)(p - cmd_done2 - 1);
     /* null terminate */
     *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
-    
-    /* Print newline */
+    /* newline */
     p = emit_print(p, s_nl, s_nl_len);
     
-    /* Print "Password: " */
-    p = emit_print(p, s_pass, s_pass_len);
+    /* ===== COMMAND PARSING ===== */
+    /* Compare cmdbuf with each command */
     
-    /* Read password into pbuf */
-    p = emit_mov64(p, 13, pbuf);
+    /* Check "help" */
+    p = emit_mov64(p, 12, cmdbuf);   /* r12 = cmdbuf */
+    p = emit_mov64(p, 13, s_cmd_help); /* r13 = "help" */
+    /* Compare strings (inline) */
+    uint8_t *cmp_help = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24; /* mov al, [r12] */
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00; /* mov bl, [r13] */
+    *p++ = 0x38; *p++ = 0xD8; /* cmp al, bl */
+    *p++ = 0x75; uint8_t *not_help = p; *p++ = 0x00; /* jne not_help */
+    *p++ = 0x84; *p++ = 0xC0; /* test al, al */
+    *p++ = 0x74; uint8_t *is_help = p; *p++ = 0x00; /* je is_help (both zero = match) */
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4; /* inc r12 */
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5; /* inc r13 */
+    *p++ = 0xEB;
+    int8_t cmp_help_off = (int8_t)(cmp_help - p - 1);
+    *p++ = (uint8_t)cmp_help_off;
+    /* is_help: */
+    *is_help = (uint8_t)(p - is_help - 1);
+    p = emit_print(p, s_help, s_help_len);
+    *p++ = 0xE9; uint8_t *jloop1 = p; p += 4; /* jmp shell_loop */
+    /* not_help: */
+    *not_help = (uint8_t)(p - not_help - 1);
     
-    uint8_t *ploop = p;
+    /* Check "exit" */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_exit);
+    uint8_t *cmp_exit = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    *p++ = 0x75; uint8_t *not_exit = p; *p++ = 0x00;
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_exit = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_exit_off = (int8_t)(cmp_exit - p - 1);
+    *p++ = (uint8_t)cmp_exit_off;
+    *is_exit = (uint8_t)(p - is_exit - 1);
+    p = emit_print(p, s_bye, s_bye_len);
+    p = emit_syscall_only(p, 20); /* SYS_SHELL_EXIT */
+    *p++ = 0xEB; *p++ = 0xFE; /* infinite loop fallback */
+    *not_exit = (uint8_t)(p - not_exit - 1);
+    
+    /* Check "clear" */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_clear);
+    uint8_t *cmp_clear = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    *p++ = 0x75; uint8_t *not_clear = p; *p++ = 0x00;
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_clear = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_clear_off = (int8_t)(cmp_clear - p - 1);
+    *p++ = (uint8_t)cmp_clear_off;
+    *is_clear = (uint8_t)(p - is_clear - 1);
+    p = emit_syscall_only(p, 19); /* SYS_CLEAR_SCREEN */
+    *p++ = 0xE9; uint8_t *jloop2 = p; p += 4;
+    *not_clear = (uint8_t)(p - not_clear - 1);
+    
+    /* Check "whoami" */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_whoami);
+    uint8_t *cmp_whoami = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    *p++ = 0x75; uint8_t *not_whoami = p; *p++ = 0x00;
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_whoami = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_whoami_off = (int8_t)(cmp_whoami - p - 1);
+    *p++ = (uint8_t)cmp_whoami_off;
+    *is_whoami = (uint8_t)(p - is_whoami - 1);
+    /* Get username and print */
+    p = emit_mov64(p, 7, namebuf);
+    p = emit_mov64(p, 6, 32);
+    p = emit_syscall_only(p, 18); /* SYS_GET_USERNAME */
+    /* Print username char by char */
+    p = emit_mov64(p, 13, namebuf);
+    uint8_t *whoami_loop = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x45; *p++ = 0x00;
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *whoami_done = p; *p++ = 0x00;
+    *p++ = 0x48; *p++ = 0x0F; *p++ = 0xB6; *p++ = 0xF8;
+    p = emit_syscall_only(p, 15);
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t whoami_loop_off = (int8_t)(whoami_loop - p - 1);
+    *p++ = (uint8_t)whoami_loop_off;
+    *whoami_done = (uint8_t)(p - whoami_done - 1);
+    p = emit_print(p, s_nl, s_nl_len);
+    *p++ = 0xE9; uint8_t *jloop3 = p; p += 4;
+    *not_whoami = (uint8_t)(p - not_whoami - 1);
+    
+    /* Check "logout" */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_logout);
+    uint8_t *cmp_logout = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    *p++ = 0x75; uint8_t *not_logout = p; *p++ = 0x00;
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_logout = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_logout_off = (int8_t)(cmp_logout - p - 1);
+    *p++ = (uint8_t)cmp_logout_off;
+    *is_logout = (uint8_t)(p - is_logout - 1);
+    /* Check if logged in */
+    p = emit_syscall_only(p, 16); /* SYS_GETUID */
+    *p++ = 0x48; *p++ = 0x83; *p++ = 0xF8; *p++ = 0x00; /* cmp rax, 0 */
+    *p++ = 0x7C; uint8_t *logout_notlogged = p; *p++ = 0x00; /* jl not_logged */
+    /* Set UID to -1 */
+    p = emit_mov64(p, 7, (uint64_t)-1);
+    p = emit_syscall_only(p, 17); /* SYS_SETUID */
+    p = emit_print(p, s_logout_ok, s_logout_ok_len);
+    *p++ = 0xE9; uint8_t *jloop4 = p; p += 4;
+    *logout_notlogged = (uint8_t)(p - logout_notlogged - 1);
+    p = emit_print(p, s_not_logged, s_not_logged_len);
+    *p++ = 0xE9; uint8_t *jloop5 = p; p += 4;
+    *not_logout = (uint8_t)(p - not_logout - 1);
+
+    /* We're running out of space in first page, continue in second page */
+    /* Jump to second code page */
+    *p++ = 0xE9;
+    int32_t jmp_to_page2 = (int32_t)(SHELL_CODE2 - (SHELL_CODE + (p - code_ptr) + 4));
+    *p++ = jmp_to_page2 & 0xFF;
+    *p++ = (jmp_to_page2 >> 8) & 0xFF;
+    *p++ = (jmp_to_page2 >> 16) & 0xFF;
+    *p++ = (jmp_to_page2 >> 24) & 0xFF;
+    
+    /* Continue code in second page */
+    p = code2_ptr;
+    
+    /* Check "login" - use near jumps because handler is long */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_login);
+    uint8_t *cmp_login = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    /* JNE near (0F 85 rel32) instead of short jump */
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *not_login = p; p += 4;
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_login = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_login_off = (int8_t)(cmp_login - p - 1);
+    *p++ = (uint8_t)cmp_login_off;
+    *is_login = (uint8_t)(p - is_login - 1);
+    /* Check if already logged in */
+    p = emit_syscall_only(p, 16);
+    *p++ = 0x48; *p++ = 0x83; *p++ = 0xF8; *p++ = 0x00;
+    *p++ = 0x7C; uint8_t *login_ok_to_login = p; *p++ = 0x00;
+    p = emit_print(p, s_already_logged, s_already_logged_len);
+    *p++ = 0xE9; uint8_t *jloop6 = p; p += 4;
+    *login_ok_to_login = (uint8_t)(p - login_ok_to_login - 1);
+    /* Prompt for username */
+    p = emit_print(p, s_user, s_user_len);
+    p = emit_mov64(p, 13, userbuf);
+    uint8_t *login_uloop = p;
     p = emit_syscall_only(p, 14);
     *p++ = 0x3C; *p++ = 0x0D;
-    *p++ = 0x74; uint8_t *pdone = p; *p++ = 0x00;
+    *p++ = 0x74; uint8_t *login_udone = p; *p++ = 0x00;
     *p++ = 0x3C; *p++ = 0x0A;
-    *p++ = 0x74; uint8_t *pdone2 = p; *p++ = 0x00;
+    *p++ = 0x74; uint8_t *login_udone2 = p; *p++ = 0x00;
     *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
     *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
-    /* echo '*' */
+    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7;
+    p = emit_syscall_only(p, 15);
+    *p++ = 0xEB;
+    int8_t login_uloop_off = (int8_t)(login_uloop - p - 1);
+    *p++ = (uint8_t)login_uloop_off;
+    *login_udone = (uint8_t)(p - login_udone - 1);
+    *login_udone2 = (uint8_t)(p - login_udone2 - 1);
+    *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
+    p = emit_print(p, s_nl, s_nl_len);
+    /* Prompt for password */
+    p = emit_print(p, s_pass, s_pass_len);
+    p = emit_mov64(p, 13, passbuf);
+    uint8_t *login_ploop = p;
+    p = emit_syscall_only(p, 14);
+    *p++ = 0x3C; *p++ = 0x0D;
+    *p++ = 0x74; uint8_t *login_pdone = p; *p++ = 0x00;
+    *p++ = 0x3C; *p++ = 0x0A;
+    *p++ = 0x74; uint8_t *login_pdone2 = p; *p++ = 0x00;
+    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
     *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x2A; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
     p = emit_syscall_only(p, 15);
     *p++ = 0xEB;
-    int8_t ploop_off = (int8_t)(ploop - p - 1);
-    *p++ = (uint8_t)ploop_off;
-    *pdone = (uint8_t)(p - pdone - 1);
-    *pdone2 = (uint8_t)(p - pdone2 - 1);
+    int8_t login_ploop_off = (int8_t)(login_ploop - p - 1);
+    *p++ = (uint8_t)login_ploop_off;
+    *login_pdone = (uint8_t)(p - login_pdone - 1);
+    *login_pdone2 = (uint8_t)(p - login_pdone2 - 1);
     *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
-    
-    /* Print newline */
     p = emit_print(p, s_nl, s_nl_len);
-    
-    /* Check choice: r12 == '1' (login), '2' (register), else exit */
-    *p++ = 0x41; *p++ = 0x80; *p++ = 0xFC; *p++ = '1'; /* cmp r12b, '1' */
-    *p++ = 0x74; uint8_t *jlogin = p; *p++ = 0x00;
-    *p++ = 0x41; *p++ = 0x80; *p++ = 0xFC; *p++ = '2'; /* cmp r12b, '2' */
-    *p++ = 0x74; uint8_t *jreg = p; *p++ = 0x00;
-    /* jmp near exit (use 32-bit relative jump since exit is far) */
-    *p++ = 0xE9; uint8_t *jexit1 = p; p += 4; /* jmp rel32 */
-    
-    /* Login: */
-    *jlogin = (uint8_t)(p - jlogin - 1);
-    p = emit_mov64(p, 7, ubuf); /* rdi = username */
-    p = emit_mov64(p, 6, pbuf); /* rsi = password */
+    /* Verify */
+    p = emit_mov64(p, 7, userbuf);
+    p = emit_mov64(p, 6, passbuf);
     p = emit_syscall_only(p, 10); /* SYS_PASS_VERIFY */
-    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
-    *p++ = 0x75; uint8_t *jfail = p; *p++ = 0x00; /* jne fail */
-    /* success: */
-    p = emit_print(p, s_ok, s_ok_len);
-    /* jmp near exit */
-    *p++ = 0xE9; uint8_t *jexit2 = p; p += 4;
-    /* fail: */
-    *jfail = (uint8_t)(p - jfail - 1);
-    p = emit_print(p, s_fail, s_fail_len);
-    /* jmp near exit */
-    *p++ = 0xE9; uint8_t *jexit3 = p; p += 4;
-    
-    /* Register: */
-    *jreg = (uint8_t)(p - jreg - 1);
-    p = emit_mov64(p, 7, ubuf);
-    p = emit_syscall_only(p, 12); /* SYS_PASS_EXISTS */
-    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
-    *p++ = 0x75; uint8_t *jexists = p; *p++ = 0x00; /* jne exists */
-    /* store new user */
-    p = emit_mov64(p, 7, ubuf);
-    p = emit_mov64(p, 6, pbuf);
-    p = emit_syscall_only(p, 11); /* SYS_PASS_STORE */
-    p = emit_print(p, s_reg, s_reg_len);
-    /* jmp near exit */
-    *p++ = 0xE9; uint8_t *jexit4 = p; p += 4;
-    /* exists: */
-    *jexists = (uint8_t)(p - jexists - 1);
-    p = emit_print(p, s_exists, s_exists_len);
-    
-    /* Exit: (fall through from exists, or jump here) */
-    uint8_t *exit_label = p;
-    /* Patch all near jumps to exit */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0;
+    /* Use near jump (JNE rel32) because success path is long */
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *login_failed = p; p += 4;
+    /* Get UID for the username and set it */
+    p = emit_mov64(p, 7, userbuf);
+    p = emit_syscall_only(p, 21); /* SYS_PASS_GET_UID - returns actual UID for username */
+    /* rax now contains the UID, pass it to SYS_SETUID */
+    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7; /* mov rdi, rax */
+    p = emit_syscall_only(p, 17); /* SYS_SETUID */
+    p = emit_print(p, s_login_ok, s_login_ok_len);
+    /* Print username */
+    p = emit_mov64(p, 13, userbuf);
+    uint8_t *login_name_loop = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x45; *p++ = 0x00;
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *login_name_done = p; *p++ = 0x00;
+    *p++ = 0x48; *p++ = 0x0F; *p++ = 0xB6; *p++ = 0xF8;
+    p = emit_syscall_only(p, 15);
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t login_name_off = (int8_t)(login_name_loop - p - 1);
+    *p++ = (uint8_t)login_name_off;
+    *login_name_done = (uint8_t)(p - login_name_done - 1);
+    p = emit_print(p, s_nl, s_nl_len);
+    *p++ = 0xE9; uint8_t *jloop7 = p; p += 4;
+    /* Patch login_failed (32-bit offset) */
     {
-        int32_t off_early = (int32_t)(exit_label - (jexit_early + 4));
-        jexit_early[0] = off_early & 0xFF;
-        jexit_early[1] = (off_early >> 8) & 0xFF;
-        jexit_early[2] = (off_early >> 16) & 0xFF;
-        jexit_early[3] = (off_early >> 24) & 0xFF;
-        
-        int32_t off1 = (int32_t)(exit_label - (jexit1 + 4));
-        jexit1[0] = off1 & 0xFF;
-        jexit1[1] = (off1 >> 8) & 0xFF;
-        jexit1[2] = (off1 >> 16) & 0xFF;
-        jexit1[3] = (off1 >> 24) & 0xFF;
-        
-        int32_t off2 = (int32_t)(exit_label - (jexit2 + 4));
-        jexit2[0] = off2 & 0xFF;
-        jexit2[1] = (off2 >> 8) & 0xFF;
-        jexit2[2] = (off2 >> 16) & 0xFF;
-        jexit2[3] = (off2 >> 24) & 0xFF;
-        
-        int32_t off3 = (int32_t)(exit_label - (jexit3 + 4));
-        jexit3[0] = off3 & 0xFF;
-        jexit3[1] = (off3 >> 8) & 0xFF;
-        jexit3[2] = (off3 >> 16) & 0xFF;
-        jexit3[3] = (off3 >> 24) & 0xFF;
-        
-        int32_t off4 = (int32_t)(exit_label - (jexit4 + 4));
-        jexit4[0] = off4 & 0xFF;
-        jexit4[1] = (off4 >> 8) & 0xFF;
-        jexit4[2] = (off4 >> 16) & 0xFF;
-        jexit4[3] = (off4 >> 24) & 0xFF;
+        int32_t off = (int32_t)(p - login_failed - 4);
+        login_failed[0] = off & 0xFF;
+        login_failed[1] = (off >> 8) & 0xFF;
+        login_failed[2] = (off >> 16) & 0xFF;
+        login_failed[3] = (off >> 24) & 0xFF;
     }
-    p = emit_print(p, s_bye, s_bye_len);
-    p = emit_syscall_only(p, 1); /* SYSCALL_TEST - returns to kernel */
-    *p++ = 0xEB; *p++ = 0xFE; /* infinite loop fallback */
+    p = emit_print(p, s_login_fail, s_login_fail_len);
+    *p++ = 0xE9; uint8_t *jloop8 = p; p += 4;
+    /* Patch not_login (32-bit offset) */
+    {
+        int32_t off = (int32_t)(p - not_login - 4);
+        not_login[0] = off & 0xFF;
+        not_login[1] = (off >> 8) & 0xFF;
+        not_login[2] = (off >> 16) & 0xFF;
+        not_login[3] = (off >> 24) & 0xFF;
+    }
     
-    uart_puts("Generated bytes of code.\n");
-    vga_write("Default user: admin / 1234\n\n");
-    vga_write("Jumping to Ring 3...\n\n");
+    /* Check "register" - use near jumps because handler is long */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_register);
+    uint8_t *cmp_reg = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    /* JNE near (0F 85 rel32) instead of short jump */
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *not_reg = p; p += 4;
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_reg = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_reg_off = (int8_t)(cmp_reg - p - 1);
+    *p++ = (uint8_t)cmp_reg_off;
+    *is_reg = (uint8_t)(p - is_reg - 1);
+    /* Prompt for username */
+    p = emit_print(p, s_user, s_user_len);
+    p = emit_mov64(p, 13, userbuf);
+    uint8_t *reg_uloop = p;
+    p = emit_syscall_only(p, 14);
+    *p++ = 0x3C; *p++ = 0x0D;
+    *p++ = 0x74; uint8_t *reg_udone = p; *p++ = 0x00;
+    *p++ = 0x3C; *p++ = 0x0A;
+    *p++ = 0x74; uint8_t *reg_udone2 = p; *p++ = 0x00;
+    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7;
+    p = emit_syscall_only(p, 15);
+    *p++ = 0xEB;
+    int8_t reg_uloop_off = (int8_t)(reg_uloop - p - 1);
+    *p++ = (uint8_t)reg_uloop_off;
+    *reg_udone = (uint8_t)(p - reg_udone - 1);
+    *reg_udone2 = (uint8_t)(p - reg_udone2 - 1);
+    *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
+    p = emit_print(p, s_nl, s_nl_len);
+    /* Check if user exists */
+    p = emit_mov64(p, 7, userbuf);
+    p = emit_syscall_only(p, 12); /* SYS_PASS_EXISTS */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x75; uint8_t *reg_exists = p; *p++ = 0x00;
+    /* Prompt for password */
+    p = emit_print(p, s_pass, s_pass_len);
+    p = emit_mov64(p, 13, passbuf);
+    uint8_t *reg_ploop = p;
+    p = emit_syscall_only(p, 14);
+    *p++ = 0x3C; *p++ = 0x0D;
+    *p++ = 0x74; uint8_t *reg_pdone = p; *p++ = 0x00;
+    *p++ = 0x3C; *p++ = 0x0A;
+    *p++ = 0x74; uint8_t *reg_pdone2 = p; *p++ = 0x00;
+    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x2A; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    p = emit_syscall_only(p, 15);
+    *p++ = 0xEB;
+    int8_t reg_ploop_off = (int8_t)(reg_ploop - p - 1);
+    *p++ = (uint8_t)reg_ploop_off;
+    *reg_pdone = (uint8_t)(p - reg_pdone - 1);
+    *reg_pdone2 = (uint8_t)(p - reg_pdone2 - 1);
+    *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
+    p = emit_print(p, s_nl, s_nl_len);
+    /* Store user */
+    p = emit_mov64(p, 7, userbuf);
+    p = emit_mov64(p, 6, passbuf);
+    p = emit_syscall_only(p, 11); /* SYS_PASS_STORE */
+    p = emit_print(p, s_reg_ok, s_reg_ok_len);
+    *p++ = 0xE9; uint8_t *jloop9 = p; p += 4;
+    *reg_exists = (uint8_t)(p - reg_exists - 1);
+    p = emit_print(p, s_reg_exists, s_reg_exists_len);
+    *p++ = 0xE9; uint8_t *jloop10 = p; p += 4;
+    /* Patch not_reg (32-bit offset) */
+    {
+        int32_t off = (int32_t)(p - not_reg - 4);
+        not_reg[0] = off & 0xFF;
+        not_reg[1] = (off >> 8) & 0xFF;
+        not_reg[2] = (off >> 16) & 0xFF;
+        not_reg[3] = (off >> 24) & 0xFF;
+    }
+    
+    /* Unknown command */
+    p = emit_print(p, s_unknown, s_unknown_len);
+    
+    /* Jump back to shell loop */
+    uint8_t *back_to_loop = p;
+    *p++ = 0xE9;
+    int32_t loop_off32 = (int32_t)(shell_loop - (uint8_t*)SHELL_CODE - (SHELL_CODE2 - SHELL_CODE + (p - code2_ptr)));
+    /* This offset is complex because we're jumping from page2 back to page1 */
+    /* shell_loop is at code_ptr + X, we're at code2_ptr + Y */
+    /* Virtual: SHELL_CODE2 + Y -> SHELL_CODE + X */
+    /* Offset = (SHELL_CODE + X) - (SHELL_CODE2 + Y + 4) */
+    uint64_t target = SHELL_CODE + (shell_loop - code_ptr);
+    uint64_t source = SHELL_CODE2 + (p - code2_ptr) + 4;
+    int32_t jmp_back_off = (int32_t)(target - source);
+    *p++ = jmp_back_off & 0xFF;
+    *p++ = (jmp_back_off >> 8) & 0xFF;
+    *p++ = (jmp_back_off >> 16) & 0xFF;
+    *p++ = (jmp_back_off >> 24) & 0xFF;
+    
+    /* Patch all the jump-to-loop offsets from page2 */
+    #define PATCH_JLOOP(jptr) do { \
+        uint64_t t = SHELL_CODE + (shell_loop - code_ptr); \
+        uint64_t s = SHELL_CODE2 + ((jptr) - code2_ptr) + 4; \
+        int32_t o = (int32_t)(t - s); \
+        (jptr)[0] = o & 0xFF; \
+        (jptr)[1] = (o >> 8) & 0xFF; \
+        (jptr)[2] = (o >> 16) & 0xFF; \
+        (jptr)[3] = (o >> 24) & 0xFF; \
+    } while(0)
+    
+    PATCH_JLOOP(jloop6);
+    PATCH_JLOOP(jloop7);
+    PATCH_JLOOP(jloop8);
+    PATCH_JLOOP(jloop9);
+    PATCH_JLOOP(jloop10);
+    
+    #undef PATCH_JLOOP
+    
+    /* Patch jumps from page1 to shell_loop */
+    #define PATCH_JLOOP_P1(jptr) do { \
+        uint64_t t = SHELL_CODE + (shell_loop - code_ptr); \
+        uint64_t s = SHELL_CODE + ((jptr) - code_ptr) + 4; \
+        int32_t o = (int32_t)(t - s); \
+        (jptr)[0] = o & 0xFF; \
+        (jptr)[1] = (o >> 8) & 0xFF; \
+        (jptr)[2] = (o >> 16) & 0xFF; \
+        (jptr)[3] = (o >> 24) & 0xFF; \
+    } while(0)
+    
+    PATCH_JLOOP_P1(jloop1);
+    PATCH_JLOOP_P1(jloop2);
+    PATCH_JLOOP_P1(jloop3);
+    PATCH_JLOOP_P1(jloop4);
+    PATCH_JLOOP_P1(jloop5);
+    
+    #undef PATCH_JLOOP_P1
+    
+    uart_puts("[SHELL] Code generated, launching...\n");
+    vga_write("Launching Tomahawk Shell in Ring 3...\n\n");
     
     /* Save kernel context */
     usermode_pass_completed = 0;
+    usermode_pass_return_rip = 0;
     __asm__ volatile(
         "mov %%rsp, %0\n"
         "mov %%rbp, %1\n"
@@ -949,9 +1308,8 @@ void run_usermode_password_demo(void) {
     );
     
     if (usermode_pass_completed) {
-        vga_write("\n=== Returned from Ring 3 ===\n");
-        vga_write("Press ESC to return to menu.\n");
-        /* Wait for ESC */
+        vga_write("\n=== Shell Exited ===\n");
+        vga_write("Press ESC to return to demo menu.\n");
         while (1) {
             char c = keyboard_getchar();
             if (c == 27) break;
@@ -960,21 +1318,21 @@ void run_usermode_password_demo(void) {
         return;
     }
     
-    /* Mask timer AND keyboard before entering user mode - we'll use polling only */
+    /* Mask timer AND keyboard before entering user mode */
     uint8_t pic_mask = hal_inb(0x21);
-    hal_outb(0x21, pic_mask | 0x03);  /* IRQ0=timer, IRQ1=keyboard */
+    hal_outb(0x21, pic_mask | 0x03);
     
-    /* Flush any pending keyboard data */
+    /* Flush keyboard */
     while (hal_inb(0x64) & 0x01) {
-        hal_inb(0x60);  /* discard */
+        hal_inb(0x60);
     }
     
     /* Jump to Ring 3 */
     uint64_t user_ss = 0x1B;
-    uint64_t user_rsp = UPASS_STACK - 8;
+    uint64_t user_rsp = SHELL_STACK - 8;
     uint64_t user_rflags = 0x202;
     uint64_t user_cs = 0x23;
-    uint64_t user_rip = UPASS_CODE;
+    uint64_t user_rip = SHELL_CODE;
     
     __asm__ volatile(
         "cli\n"
@@ -983,11 +1341,11 @@ void run_usermode_password_demo(void) {
         "mov %%ax, %%es\n"
         "mov %%ax, %%fs\n"
         "mov %%ax, %%gs\n"
-        "push %0\n"       /* SS */
-        "push %1\n"       /* RSP */
-        "push %2\n"       /* RFLAGS */
-        "push %3\n"       /* CS */
-        "push %4\n"       /* RIP */
+        "push %0\n"
+        "push %1\n"
+        "push %2\n"
+        "push %3\n"
+        "push %4\n"
         "xor %%rax, %%rax\n"
         "xor %%rbx, %%rbx\n"
         "xor %%rcx, %%rcx\n"
@@ -1008,8 +1366,9 @@ void run_usermode_password_demo(void) {
         : "rax", "memory"
     );
     
-    #undef UPASS_CODE
-    #undef UPASS_DATA
-    #undef UPASS_BUF
-    #undef UPASS_STACK
+    #undef SHELL_CODE
+    #undef SHELL_CODE2
+    #undef SHELL_DATA
+    #undef SHELL_BUF
+    #undef SHELL_STACK
 }

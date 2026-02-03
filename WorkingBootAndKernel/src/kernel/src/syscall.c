@@ -23,6 +23,9 @@ extern volatile uint64_t usermode_pass_return_rbp;
 extern volatile uint64_t usermode_pass_return_rip;
 extern volatile int usermode_pass_completed;
 
+/* Shell state - current logged in user ID (-1 = not logged in) */
+static volatile int shell_current_uid = -1;
+
 /* Helper to return to kernel from usermode demo */
 static void return_to_kernel_demo(volatile uint64_t* rsp, volatile uint64_t* rbp, 
                                    volatile uint64_t* rip, volatile int* completed) {
@@ -186,6 +189,75 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             /* arg1 = character to print */
             vga_putc((char)arg1);
             return 0;
+
+        case SYS_GETUID:
+            /* Return current shell user ID (-1 if not logged in) */
+            return (uint64_t)shell_current_uid;
+
+        case SYS_SETUID:
+            /* Set current shell user ID (arg1 = uid) */
+            shell_current_uid = (int)arg1;
+            uart_puts("[SHELL] UID set to ");
+            uart_putu(shell_current_uid);
+            uart_puts("\n");
+            return 0;
+
+        case SYS_GET_USERNAME:
+            /* arg1 = buffer, arg2 = buffer size */
+            if (shell_current_uid < 0) {
+                /* Not logged in - return "guest" */
+                const char* guest = "guest";
+                char* buf = (char*)arg1;
+                int i = 0;
+                for (; guest[i] && i < (int)arg2 - 1; i++) {
+                    buf[i] = guest[i];
+                }
+                buf[i] = '\0';
+                return 0;
+            }
+            return (uint64_t)password_store_get_username(shell_current_uid, (char*)arg1, (int)arg2);
+
+        case SYS_CLEAR_SCREEN:
+            /* Clear the VGA screen */
+            vga_clear(0, 7);  /* black background, light grey text */
+            return 0;
+
+        case SYS_SHELL_EXIT:
+            /* Exit from shell - return to kernel */
+            __asm__ volatile(
+                "mov $0x10, %%ax\n"
+                "mov %%ax, %%ds\n"
+                "mov %%ax, %%es\n"
+                "mov %%ax, %%fs\n"
+                ::: "ax"
+            );
+            
+            /* Reset shell UID */
+            shell_current_uid = -1;
+            
+            if (usermode_pass_return_rip != 0 && !usermode_pass_completed) {
+                /* Restore IRQs */
+                uint8_t pic_mask = hal_inb(0x21);
+                pic_mask &= ~0x01;  /* Unmask IRQ0 (timer) */
+                pic_mask &= ~0x02;  /* Unmask IRQ1 (keyboard) */
+                hal_outb(0x21, pic_mask);
+                __asm__ volatile("sti");
+                
+                usermode_pass_completed = 1;
+                __asm__ volatile("swapgs");
+                __asm__ volatile(
+                    "mov %0, %%rsp\n"
+                    "mov %1, %%rbp\n"
+                    "jmp *%2\n"
+                    :
+                    : "r"(usermode_pass_return_rsp), "r"(usermode_pass_return_rbp), "r"(usermode_pass_return_rip)
+                );
+            }
+            return 0;
+
+        case SYS_PASS_GET_UID:
+            /* arg1 = username, returns UID or -1 if not found */
+            return (uint64_t)password_store_get_uid((const char*)arg1);
 
         case 99:
             /* Exit from usermode password demo - return to kernel */

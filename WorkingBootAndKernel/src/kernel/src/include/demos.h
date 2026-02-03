@@ -24,10 +24,7 @@ void run_usermode_demo(void);
 /* Run VFS demo */
 void run_vfs_demo(void);
 
-/* Run Block Device demo */
-void run_block_device_demo(void);
-
-/* Run user mode password demo - uses syscalls from Ring 3 */
-void run_usermode_password_demo(void);
+/* Run Tomahawk Shell - interactive shell in Ring 3 */
+void run_tomahawk_shell(void);
 
 #endif /* DEMOS_H */
