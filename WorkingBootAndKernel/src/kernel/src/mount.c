@@ -314,6 +314,9 @@ int fs_init_root(void) {
     }
     block_device_register(root_block_device);
     
+    /* Set VFS backing device BEFORE initializing VFS */
+    vfs_set_backing_device(root_block_device);
+    
     /* Initialize VFS layer */
     vfs_init();
     
