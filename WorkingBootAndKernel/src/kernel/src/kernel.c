@@ -30,6 +30,7 @@
 #include "include/tests.h"
 #include "include/demos.h"
 #include "include/password_store.h"
+#include "include/mount.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -197,6 +198,20 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 
 	/* Initialize password store */
 	password_store_init();
+
+	/* Initialize filesystem and mount root */
+	if (fs_init_root() != 0) {
+		const char* fs_err = "ERROR: Failed to initialize root filesystem\n";
+		for (int i = 0; fs_err[i]; i++) {
+			outb(0x3F8, fs_err[i]);
+		}
+	}
+	
+	/* Mount system directories (/tmp, /dev) */
+	fs_mount_system_dirs();
+	
+	/* Print mount table for debugging */
+	mount_print_table();
 
 	/* Initialize user syscall machinery */
 	syscall_init();

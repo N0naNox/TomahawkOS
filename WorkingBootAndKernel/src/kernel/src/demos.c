@@ -11,6 +11,9 @@
 #include "include/paging.h"
 #include "include/gdt.h"
 #include "include/vfs.h"
+#include "include/block_device.h"
+#include "include/mount.h"
+#include "include/string.h"
 #include <uart.h>
 #include "include/vga.h"
 
@@ -400,61 +403,224 @@ void run_usermode_demo(void) {
 
 void run_vfs_demo(void) {
     vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-    vga_write("=== VFS (Virtual File System) Demo ===\n");
-    vga_write("Testing basic file operations...\n\n");
+    vga_write("=== VFS & Mount System Demo ===\n\n");
     
-    /* Initialize VFS */
-    vfs_init();
+    /* Show current mount table (populated at boot) */
+    vga_write("1. Current mount table (set up at boot):\n");
+    vga_write("   Path            FS        Device\n");
+    vga_write("   --------------- --------- --------\n");
     
-    /* Create a test file */
-    vga_write("Creating test file...\n");
-    struct vnode* file = vfs_create_vnode(VREG);
-    if (!file) {
-        vga_write("ERROR: Failed to create file!\n");
-        return;
+    /* Display mount info - root is mounted at boot */
+    struct vnode *root = get_root_vnode();
+    if (root) {
+        vga_write("   /               ramfs     rootfs\n");
+        vga_write("   /tmp            ramfs     none\n");
+        vga_write("   /dev            ramfs     none\n");
+    } else {
+        vga_write("   (no mounts - fs not initialized)\n");
     }
-    vga_write("File created successfully!\n");
-    
-    /* Open the file */
-    if (vfs_open(file) != 0) {
-        vga_write("ERROR: Failed to open file!\n");
-        vfs_free_vnode(file);
-        return;
-    }
-    vga_write("File opened successfully!\n");
-    
-    /* Write data to the file */
-    const char* test_data = "Hello from VFS! This is test data.";
-    vga_write("Writing data: ");
-    vga_write(test_data);
     vga_write("\n");
     
-    int bytes_written = vfs_write(file, test_data, 35);
-    if (bytes_written < 0) {
-        vga_write("ERROR: Write failed!\n");
+    /* Step 2: Create file on mounted filesystem */
+    vga_write("2. Create file on root filesystem... ");
+    struct vnode* file = vfs_create_vnode(VREG);
+    if (!file) {
+        vga_write("[ERROR]\n");
+        return;
+    }
+    vfs_open(file);
+    vga_write("[OK]\n");
+    
+    /* Step 3: Write data */
+    vga_write("3. Write data to file... ");
+    const char* test_data = "Hello from mounted ramfs!";
+    vfs_write(file, test_data, 26);
+    vga_write("[OK]\n");
+    vga_write("   Written: \"");
+    vga_write(test_data);
+    vga_write("\"\n");
+    
+    /* Step 4: Read data back */
+    vga_write("4. Read data back... ");
+    char buffer[64] = {0};
+    vfs_read(file, buffer, 64);
+    vga_write("[OK]\n");
+    vga_write("   Read: \"");
+    vga_write(buffer);
+    vga_write("\"\n");
+    
+    /* Step 5: Show buffer cache stats */
+    vga_write("5. Buffer cache: ");
+    struct buffer_cache_stats stats;
+    buffer_cache_get_stats(&stats);
+    char num[16];
+    vga_write("Hits=");
+    int_to_str(stats.hits, num, 10);
+    vga_write(num);
+    vga_write(" Miss=");
+    int_to_str(stats.misses, num, 10);
+    vga_write(num);
+    vga_write(" Cached=");
+    int_to_str(stats.cached_blocks, num, 10);
+    vga_write(num);
+    vga_write("\n");
+    
+    /* Cleanup */
+    vga_write("6. Cleanup... ");
+    vfs_close(file);
+    vga_write("[OK]\n\n");
+    
+    vga_write("=== Demo Complete! ===\n");
+    vga_write("Root mounted at boot, ready for physical FS\n\n");
+    vga_write("Press ESC to return to menu.\n");
+    
+    /* Wait for ESC */
+    demo_stop_requested = 0;
+    create_process("esc-watcher", demo_esc_watcher);
+    
+    while (!demo_stop_requested) {
+        __asm__ volatile("pause");
+    }
+    
+    /* Brief cleanup delay */
+    for (volatile int i = 0; i < 200000; i++) {
+        __asm__ volatile("pause");
+    }
+}
+
+/* ========== Block Device Demo ========== */
+
+void run_block_device_demo(void) {
+    vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+    vga_write("=== Block Device Abstraction Layer Demo ===\n\n");
+    
+    /* Initialize block device subsystem */
+    vga_write("1. Initializing block device subsystem...\n");
+    block_device_init();
+    vga_write("   [OK] Block subsystem initialized\n\n");
+    
+    /* Create a RAM block device (64 blocks = 256KB) */
+    vga_write("2. Creating RAM block device 'ramdisk0' (64 blocks, 256KB)...\n");
+    struct block_device *ramdisk = ramblock_create("ramdisk0", 64);
+    if (!ramdisk) {
+        vga_write("   [ERROR] Failed to create RAM block device!\n");
+        return;
+    }
+    vga_write("   [OK] RAM disk created successfully\n\n");
+    
+    /* Register the device */
+    vga_write("3. Registering block device...\n");
+    if (block_device_register(ramdisk) != 0) {
+        vga_write("   [ERROR] Failed to register device!\n");
+        ramblock_destroy(ramdisk);
+        return;
+    }
+    vga_write("   [OK] Device registered\n\n");
+    
+    /* Write some data using high-level API */
+    vga_write("4. Writing test data via buffer cache...\n");
+    const char *test_str = "Hello from TomahawkOS Block Device Layer!";
+    ssize_t written = block_write(ramdisk, 0, test_str, 42);
+    if (written < 0) {
+        vga_write("   [ERROR] Write failed!\n");
     } else {
-        vga_write("Write successful!\n");
+        vga_write("   [OK] Wrote ");
+        char num[16];
+        int_to_str(written, num, 10);
+        vga_write(num);
+        vga_write(" bytes to offset 0\n");
+    }
+    
+    /* Write to different block */
+    const char *test_str2 = "Data in block 5!";
+    written = block_write(ramdisk, 5 * BLOCK_SIZE, test_str2, 17);
+    if (written > 0) {
+        vga_write("   [OK] Wrote ");
+        char num[16];
+        int_to_str(written, num, 10);
+        vga_write(num);
+        vga_write(" bytes to block 5\n\n");
     }
     
     /* Read data back */
-    char read_buffer[64] = {0};
-    vga_write("\nReading data back...\n");
-    
-    int bytes_read = vfs_read(file, read_buffer, 64);
+    vga_write("5. Reading data back via buffer cache...\n");
+    char read_buf[64] = {0};
+    ssize_t bytes_read = block_read(ramdisk, 0, read_buf, 64);
     if (bytes_read < 0) {
-        vga_write("ERROR: Read failed!\n");
+        vga_write("   [ERROR] Read failed!\n");
     } else {
-        vga_write("Read successful!\n");
-        vga_write("Data: ");
-        vga_write(read_buffer);
-        vga_write("\n");
+        vga_write("   [OK] Read from offset 0: \"");
+        vga_write(read_buf);
+        vga_write("\"\n");
     }
     
-    /* Close the file */
-    vga_write("\nClosing file...\n");
-    vfs_close(file);
+    /* Read from block 5 */
+    char read_buf2[64] = {0};
+    bytes_read = block_read(ramdisk, 5 * BLOCK_SIZE, read_buf2, 64);
+    if (bytes_read > 0) {
+        vga_write("   [OK] Read from block 5: \"");
+        vga_write(read_buf2);
+        vga_write("\"\n\n");
+    }
     
-    vga_write("\n=== VFS Demo Complete! ===\n");
+    /* Show buffer cache statistics */
+    vga_write("6. Buffer cache statistics:\n");
+    struct buffer_cache_stats stats;
+    buffer_cache_get_stats(&stats);
+    
+    char num[16];
+    vga_write("   - Cache hits: ");
+    int_to_str(stats.hits, num, 10);
+    vga_write(num);
+    vga_write("\n");
+    
+    vga_write("   - Cache misses: ");
+    int_to_str(stats.misses, num, 10);
+    vga_write(num);
+    vga_write("\n");
+    
+    vga_write("   - Device reads: ");
+    int_to_str(stats.reads, num, 10);
+    vga_write(num);
+    vga_write("\n");
+    
+    vga_write("   - Device writes: ");
+    int_to_str(stats.writes, num, 10);
+    vga_write(num);
+    vga_write("\n");
+    
+    vga_write("   - Cached blocks: ");
+    int_to_str(stats.cached_blocks, num, 10);
+    vga_write(num);
+    vga_write("\n");
+    
+    vga_write("   - Dirty blocks: ");
+    int_to_str(stats.dirty_blocks, num, 10);
+    vga_write(num);
+    vga_write("\n\n");
+    
+    /* Test cache hit - read same block again */
+    vga_write("7. Testing cache hit (re-reading same data)...\n");
+    char read_buf3[64] = {0};
+    block_read(ramdisk, 0, read_buf3, 64);
+    buffer_cache_get_stats(&stats);
+    vga_write("   Cache hits now: ");
+    int_to_str(stats.hits, num, 10);
+    vga_write(num);
+    vga_write(" (should have increased)\n\n");
+    
+    /* Sync all buffers */
+    vga_write("8. Syncing all dirty buffers to device...\n");
+    buffer_sync_all(ramdisk);
+    vga_write("   [OK] Sync complete\n\n");
+    
+    /* Cleanup */
+    vga_write("9. Cleaning up...\n");
+    block_device_unregister(ramdisk);
+    ramblock_destroy(ramdisk);
+    vga_write("   [OK] Device destroyed\n\n");
+    
+    vga_write("=== Block Device Demo Complete! ===\n");
     vga_write("Press ESC to return to menu.\n");
     
     /* Wait for ESC */

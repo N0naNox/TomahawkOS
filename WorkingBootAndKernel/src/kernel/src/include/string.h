@@ -39,4 +39,21 @@ void* memcpy(void* dst, const void* src, size_t n);
  */
 void* memset(void* dst, int c, size_t n);
 
+/**
+ * @brief Compare two strings.
+ * @param s1[in]    First string.
+ * @param s2[in]    Second string.
+ * @return          0 if equal, <0 if s1 < s2, >0 if s1 > s2.
+ */
+int strcmp(const char* s1, const char* s2);
+
+/**
+ * @brief Convert integer to string.
+ * @param value[in] Integer to convert.
+ * @param buf[out]  Buffer to write to.
+ * @param base[in]  Numeric base (10 for decimal, 16 for hex).
+ * @return          Pointer to buf.
+ */
+char* int_to_str(int value, char* buf, int base);
+
 #endif
