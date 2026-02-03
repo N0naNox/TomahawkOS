@@ -260,7 +260,7 @@ uintptr_t paging_get_current_cr3() {
 
 #define FRAMEBUFFER_PADDR  0x80000000ULL
 #define FRAMEBUFFER_SIZE   (4 * 1024 * 1024)  /* 4 MiB to be safe */
-#define EARLY_IO_SIZE      (4 * 1024 * 1024)  /* Minimal low window for early identity access */
+#define EARLY_IO_SIZE      (512 * 1024 * 1024)  /* 512 MiB - enough for kernel heap/allocations */
 
 uintptr_t paging_setup_kernel_pml4(void) {
     /* Create kernel PML4 */

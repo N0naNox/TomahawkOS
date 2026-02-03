@@ -12,6 +12,7 @@
 #include "include/gdt.h"
 #include "include/vfs.h"
 #include "include/block_device.h"
+#include "include/mount.h"
 #include "include/string.h"
 #include <uart.h>
 #include "include/vga.h"
@@ -402,61 +403,54 @@ void run_usermode_demo(void) {
 
 void run_vfs_demo(void) {
     vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-    vga_write("=== VFS with Block Device Layer Demo ===\n\n");
+    vga_write("=== VFS & Mount System Demo ===\n\n");
     
-    /* Step 1: Initialize block device subsystem */
-    vga_write("1. Init block device subsystem... ");
-    block_device_init();
-    vga_write("[OK]\n");
+    /* Show current mount table (populated at boot) */
+    vga_write("1. Current mount table (set up at boot):\n");
+    vga_write("   Path            FS        Device\n");
+    vga_write("   --------------- --------- --------\n");
     
-    /* Step 2: Create a RAM block device as VFS backend */
-    vga_write("2. Create RAM block device 'vfs_storage'... ");
-    struct block_device *storage = ramblock_create("vfs_storage", 32);
-    if (!storage) {
-        vga_write("[ERROR]\n");
-        return;
+    /* Display mount info - root is mounted at boot */
+    struct vnode *root = get_root_vnode();
+    if (root) {
+        vga_write("   /               ramfs     rootfs\n");
+        vga_write("   /tmp            ramfs     none\n");
+        vga_write("   /dev            ramfs     none\n");
+    } else {
+        vga_write("   (no mounts - fs not initialized)\n");
     }
-    block_device_register(storage);
-    vga_write("[OK]\n");
+    vga_write("\n");
     
-    /* Step 3: Initialize VFS */
-    vga_write("3. Init VFS layer... ");
-    vfs_init();
-    vga_write("[OK]\n");
-    
-    /* Step 4: Create a file and write data */
-    vga_write("4. Create file, write data... ");
+    /* Step 2: Create file on mounted filesystem */
+    vga_write("2. Create file on root filesystem... ");
     struct vnode* file = vfs_create_vnode(VREG);
     if (!file) {
         vga_write("[ERROR]\n");
         return;
     }
-    
     vfs_open(file);
-    const char* test_data = "Hello from VFS over Block Device!";
-    vfs_write(file, test_data, 34);
-    block_write(storage, 0, test_data, 34);
     vga_write("[OK]\n");
-    vga_write("   Data: \"");
+    
+    /* Step 3: Write data */
+    vga_write("3. Write data to file... ");
+    const char* test_data = "Hello from mounted ramfs!";
+    vfs_write(file, test_data, 26);
+    vga_write("[OK]\n");
+    vga_write("   Written: \"");
     vga_write(test_data);
     vga_write("\"\n");
     
-    /* Step 5: Read data back */
-    vga_write("5. Read data back...\n");
-    char vfs_buffer[64] = {0};
-    vfs_read(file, vfs_buffer, 64);
-    vga_write("   VFS:   \"");
-    vga_write(vfs_buffer);
+    /* Step 4: Read data back */
+    vga_write("4. Read data back... ");
+    char buffer[64] = {0};
+    vfs_read(file, buffer, 64);
+    vga_write("[OK]\n");
+    vga_write("   Read: \"");
+    vga_write(buffer);
     vga_write("\"\n");
     
-    char blk_buffer[64] = {0};
-    block_read(storage, 0, blk_buffer, 64);
-    vga_write("   Block: \"");
-    vga_write(blk_buffer);
-    vga_write("\"\n");
-    
-    /* Step 6: Show buffer cache statistics */
-    vga_write("6. Buffer stats: ");
+    /* Step 5: Show buffer cache stats */
+    vga_write("5. Buffer cache: ");
     struct buffer_cache_stats stats;
     buffer_cache_get_stats(&stats);
     char num[16];
@@ -471,16 +465,13 @@ void run_vfs_demo(void) {
     vga_write(num);
     vga_write("\n");
     
-    /* Step 7: Cleanup */
-    vga_write("7. Sync and cleanup... ");
-    buffer_sync_all(storage);
+    /* Cleanup */
+    vga_write("6. Cleanup... ");
     vfs_close(file);
-    block_device_unregister(storage);
-    ramblock_destroy(storage);
     vga_write("[OK]\n\n");
     
     vga_write("=== Demo Complete! ===\n");
-    vga_write("Block layer: buffer cache + easy swap to disk\n\n");
+    vga_write("Root mounted at boot, ready for physical FS\n\n");
     vga_write("Press ESC to return to menu.\n");
     
     /* Wait for ESC */
