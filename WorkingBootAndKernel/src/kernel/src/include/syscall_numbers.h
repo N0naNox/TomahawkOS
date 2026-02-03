@@ -21,3 +21,9 @@
 #define SYS_CLEAR_SCREEN 19
 #define SYS_SHELL_EXIT 20
 #define SYS_PASS_GET_UID 21
+
+/* Demo syscalls - run kernel demos from usermode shell */
+/* Note: scheduler, COW, and signal demos removed - they require preemptive
+   scheduling which corrupts the syscall return path when context switches occur */
+#define SYS_RUN_VFS_DEMO 25
+#define SYS_RUN_TESTS 26

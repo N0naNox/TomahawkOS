@@ -14,6 +14,7 @@
 #include "include/block_device.h"
 #include "include/mount.h"
 #include "include/string.h"
+#include "include/hal_port_io.h"
 #include <uart.h>
 #include "include/vga.h"
 
@@ -472,18 +473,16 @@ void run_vfs_demo(void) {
     
     vga_write("=== Demo Complete! ===\n");
     vga_write("Root mounted at boot, ready for physical FS\n\n");
-    vga_write("Press ESC to return to menu.\n");
+    vga_write("Press ESC to return.\n");
     
-    /* Wait for ESC */
-    demo_stop_requested = 0;
-    create_process("esc-watcher", demo_esc_watcher);
-    
-    while (!demo_stop_requested) {
-        __asm__ volatile("pause");
-    }
-    
-    /* Brief cleanup delay */
-    for (volatile int i = 0; i < 200000; i++) {
+    /* Poll for ESC directly (works without interrupts) */
+    while (1) {
+        if (hal_inb(0x64) & 0x01) {
+            uint8_t scancode = hal_inb(0x60);
+            if (scancode == 0x01) {  /* ESC pressed */
+                break;
+            }
+        }
         __asm__ volatile("pause");
     }
 }
@@ -746,13 +745,15 @@ void run_tomahawk_shell(void) {
         "   |_|\\___/|_| |_| |_|\\__,_|_| |_|\\__,_| \\_/\\_/ |_|\\_\\\n"
         "                                          Shell v1.0\n\n")
     PLACE_STR(s_help, "Available commands:\n"
-        "  help     - Show this help message\n"
-        "  login    - Log in with username and password\n"
-        "  register - Create a new user account\n"
-        "  logout   - Log out current user\n"
-        "  whoami   - Show current user\n"
-        "  clear    - Clear the screen\n"
-        "  exit     - Exit shell and return to kernel\n\n")
+        "  help      - Show this help message\n"
+        "  login     - Log in with username and password\n"
+        "  register  - Create a new user account\n"
+        "  logout    - Log out current user\n"
+        "  whoami    - Show current user\n"
+        "  clear     - Clear the screen\n"
+        "  vfs       - Run VFS filesystem demo\n"
+        "  tests     - Run kernel unit tests\n"
+        "  exit      - Exit shell and return to kernel\n\n")
     PLACE_STR(s_prompt_guest, "guest@tomahawk> ")
     PLACE_STR(s_prompt_at, "@tomahawk> ")
     PLACE_STR(s_user, "Username: ")
@@ -774,6 +775,9 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_cmd_whoami, "whoami")
     PLACE_STR(s_cmd_clear, "clear")
     PLACE_STR(s_cmd_exit, "exit")
+    PLACE_STR(s_cmd_vfs, "vfs")
+    PLACE_STR(s_cmd_tests, "tests")
+    PLACE_STR(s_demo_done, "\n[Demo complete. Press any key to continue...]\n")
     
     #undef PLACE_STR
     
@@ -1230,6 +1234,66 @@ void run_tomahawk_shell(void) {
         not_reg[3] = (off >> 24) & 0xFF;
     }
     
+    /* ===== Check "vfs" ===== */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_vfs);
+    uint8_t *cmp_vfs = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *not_vfs = p; p += 4; /* JNE near */
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_vfs = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_vfs_off = (int8_t)(cmp_vfs - p - 1);
+    *p++ = (uint8_t)cmp_vfs_off;
+    *is_vfs = (uint8_t)(p - is_vfs - 1);
+    /* Call syscall 25 (SYS_RUN_VFS_DEMO) */
+    p = emit_syscall_only(p, 25);
+    p = emit_print(p, s_demo_done, s_demo_done_len);
+    p = emit_syscall_only(p, 14);
+    *p++ = 0xE9; uint8_t *jloop_vfs = p; p += 4;
+    /* Patch not_vfs */
+    {
+        int32_t off = (int32_t)(p - not_vfs - 4);
+        not_vfs[0] = off & 0xFF;
+        not_vfs[1] = (off >> 8) & 0xFF;
+        not_vfs[2] = (off >> 16) & 0xFF;
+        not_vfs[3] = (off >> 24) & 0xFF;
+    }
+    
+    /* ===== Check "tests" ===== */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_tests);
+    uint8_t *cmp_tests = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *not_tests = p; p += 4; /* JNE near */
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_tests = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_tests_off = (int8_t)(cmp_tests - p - 1);
+    *p++ = (uint8_t)cmp_tests_off;
+    *is_tests = (uint8_t)(p - is_tests - 1);
+    /* Call syscall 26 (SYS_RUN_TESTS) */
+    p = emit_syscall_only(p, 26);
+    p = emit_print(p, s_demo_done, s_demo_done_len);
+    p = emit_syscall_only(p, 14);
+    *p++ = 0xE9; uint8_t *jloop_tests = p; p += 4;
+    /* Patch not_tests */
+    {
+        int32_t off = (int32_t)(p - not_tests - 4);
+        not_tests[0] = off & 0xFF;
+        not_tests[1] = (off >> 8) & 0xFF;
+        not_tests[2] = (off >> 16) & 0xFF;
+        not_tests[3] = (off >> 24) & 0xFF;
+    }
+    
     /* Unknown command */
     p = emit_print(p, s_unknown, s_unknown_len);
     
@@ -1265,6 +1329,8 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP(jloop8);
     PATCH_JLOOP(jloop9);
     PATCH_JLOOP(jloop10);
+    PATCH_JLOOP(jloop_vfs);
+    PATCH_JLOOP(jloop_tests);
     
     #undef PATCH_JLOOP
     
@@ -1371,4 +1437,54 @@ void run_tomahawk_shell(void) {
     #undef SHELL_DATA
     #undef SHELL_BUF
     #undef SHELL_STACK
+}
+
+/* ========== Scheduler Demo ========== */
+
+static void sched_demo_busywait(void) {
+    for (volatile int i = 0; i < 2000000; i++) {
+        __asm__ volatile("pause");
+    }
+}
+
+static void sched_demo_thread_a(void) {
+    while (!demo_stop_requested) {
+        uart_puts("[thread A] hello\n");
+        vga_write("[A] ");
+        sched_demo_busywait();
+    }
+    scheduler_thread_exit();
+}
+
+static void sched_demo_thread_b(void) {
+    while (!demo_stop_requested) {
+        uart_puts("[thread B] hello\n");
+        vga_write("[B] ");
+        sched_demo_busywait();
+    }
+    scheduler_thread_exit();
+}
+
+void run_scheduler_demo(void) {
+    vga_write("\n=== Scheduler Demo ===\n");
+    vga_write("Two threads will alternate printing. Press ESC to stop.\n\n");
+    uart_puts("\n=== Scheduler Demo ===\n");
+
+    demo_stop_requested = 0;
+    create_process("esc-watcher", demo_esc_watcher);
+    create_process("demo-a", sched_demo_thread_a);
+    create_process("demo-b", sched_demo_thread_b);
+
+    /* Wait until ESC is pressed */
+    while (!demo_stop_requested) {
+        __asm__ volatile("pause");
+    }
+
+    vga_write("\n\nScheduler demo stopped.\n");
+    uart_puts("Scheduler demo stopped.\n");
+    
+    /* Allow demo threads to notice stop flag and exit */
+    for (volatile int i = 0; i < 5000000; i++) {
+        __asm__ volatile("pause");
+    }
 }

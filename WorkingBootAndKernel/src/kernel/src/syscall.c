@@ -9,6 +9,8 @@
 #include "include/hal_port_io.h"
 #include "include/keyboard.h"
 #include "include/password_store.h"
+#include "include/demos.h"
+#include "include/tests.h"
 #include "uart.h"
 
 /* External saved context from usermode demo */
@@ -258,6 +260,18 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
         case SYS_PASS_GET_UID:
             /* arg1 = username, returns UID or -1 if not found */
             return (uint64_t)password_store_get_uid((const char*)arg1);
+
+        case SYS_RUN_VFS_DEMO:
+            /* Run VFS demo from shell */
+            vga_write("\n");
+            run_vfs_demo();
+            return 0;
+
+        case SYS_RUN_TESTS:
+            /* Run kernel tests from shell */
+            vga_write("\n");
+            run_kernel_tests();
+            return 0;
 
         case 99:
             /* Exit from usermode password demo - return to kernel */
