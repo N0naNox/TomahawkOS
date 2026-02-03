@@ -52,7 +52,6 @@ typedef enum {
 
 static demo_mode_t select_demo(void);
 static void run_echo_demo(void);
-static void run_scheduler_demo(void);
 static void demo_busywait(void);
 
 volatile int demo_stop_requested = 0;
@@ -363,28 +362,6 @@ static void run_echo_demo(void) {
 		if (c) {
 			vga_putc(c);
 		}
-		__asm__ volatile("pause");
-	}
-}
-
-static void run_scheduler_demo(void) {
-	vga_write("Starting scheduler demo (ESC to stop)...\n");
-	uart_puts("Starting scheduler demo (ESC to stop)...\n");
-
-	demo_stop_requested = 0;
-	create_process("esc-watcher", demo_esc_watcher);
-	create_process("demo-a", demo_thread_a);
-	create_process("demo-b", demo_thread_b);
-
-	/* Wait until ESC is pressed */
-	while (!demo_stop_requested) {
-		__asm__ volatile("pause");
-	}
-
-	vga_write("Stopping scheduler demo...\n");
-	uart_puts("Stopping scheduler demo...\n");
-	/* Allow demo threads to notice stop flag and exit */
-	for (volatile int i = 0; i < 5000000; i++) {
 		__asm__ volatile("pause");
 	}
 }

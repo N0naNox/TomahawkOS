@@ -27,4 +27,7 @@ void run_vfs_demo(void);
 /* Run Tomahawk Shell - interactive shell in Ring 3 */
 void run_tomahawk_shell(void);
 
+/* Run scheduler demo - shows multi-threaded scheduling */
+void run_scheduler_demo(void);
+
 #endif /* DEMOS_H */
