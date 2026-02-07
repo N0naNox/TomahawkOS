@@ -1,11 +1,11 @@
 #pragma once
-#include <cstdint>
+#include <stdint.h>
 #include "vnode.h"
 
 struct file
 {
-    struct vnode* f_vnode;   // מצביע ל-vnode המתאים
-    uint32_t f_offset;       // מיקום קריאה/כתיבה נוכחי בתוך הקובץ
-    uint16_t f_flags;        // דגלים (למשל O_RDONLY,
-    int refcount;          // מונה הפניות למבנה הקובץ
-}
+    struct vnode* f_vnode;   /* Pointer to associated vnode */
+    uint32_t f_offset;       /* Current read/write position */
+    uint16_t f_flags;        /* Flags (e.g. O_RDONLY) */
+    int refcount;            /* Reference count */
+};
