@@ -27,3 +27,4 @@
    scheduling which corrupts the syscall return path when context switches occur */
 #define SYS_RUN_VFS_DEMO 25
 #define SYS_RUN_TESTS 26
+#define SYS_RUN_FAT32_DEMO 27

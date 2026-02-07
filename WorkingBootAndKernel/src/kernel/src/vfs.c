@@ -13,6 +13,7 @@
 #include "include/frame_alloc.h"
 #include "include/string.h"
 #include "include/uart.h"
+#include "include/mount.h"
 #include <stddef.h>
 
 /* Root vnode */
@@ -153,43 +154,217 @@ struct vnode* vfs_get_root(void) {
     return root_vnode;
 }
 
-int vfs_open(struct vnode* vp) {
+int vfs_open(struct vnode *vp) {
     if (!vp || !vp->v_op || !vp->v_op->vop_open) {
         return -1;
     }
     return vp->v_op->vop_open(vp);
 }
 
-int vfs_read(struct vnode* vp, void* buf, size_t nbyte) {
+int vfs_read(struct vnode *vp, void *buf, size_t nbyte) {
     if (!vp || !vp->v_op || !vp->v_op->vop_read) {
         return -1;
     }
     return vp->v_op->vop_read(vp, buf, nbyte);
 }
 
-int vfs_write(struct vnode* vp, const void* buf, size_t nbyte) {
+int vfs_write(struct vnode *vp, const void *buf, size_t nbyte) {
     if (!vp || !vp->v_op || !vp->v_op->vop_write) {
         return -1;
     }
-    return vp->v_op->vop_write(vp, (void*)buf, nbyte);
+    return vp->v_op->vop_write(vp, (void *)buf, nbyte);
 }
 
-int vfs_close(struct vnode* vp) {
+int vfs_read_at(struct vnode *vp, void *buf, size_t nbyte, uint64_t offset) {
+    if (!vp || !vp->v_op || !vp->v_op->vop_read_at) {
+        return -1;
+    }
+    return vp->v_op->vop_read_at(vp, buf, nbyte, offset);
+}
+
+int vfs_write_at(struct vnode *vp, const void *buf, size_t nbyte, uint64_t offset) {
+    if (!vp || !vp->v_op || !vp->v_op->vop_write_at) {
+        return -1;
+    }
+    return vp->v_op->vop_write_at(vp, buf, nbyte, offset);
+}
+
+int64_t vfs_getsize(struct vnode *vp) {
+    if (!vp || !vp->v_op || !vp->v_op->vop_getsize) {
+        return -1;
+    }
+    return vp->v_op->vop_getsize(vp);
+}
+
+int vfs_close(struct vnode *vp) {
     if (!vp) return -1;
-    
-    struct inode* ip = (struct inode*)vp->v_data;
+
+    /* Call FS-specific close if provided */
+    if (vp->v_op && vp->v_op->vop_close) {
+        vp->v_op->vop_close(vp);
+    }
+
+    struct inode *ip = (struct inode *)vp->v_data;
     if (ip) {
         /* Sync any dirty blocks to device */
         if (ip->i_bdev && ip->i_blocks > 0) {
             buffer_sync_all(ip->i_bdev);
         }
-        
+
         ip->i_refcount--;
         if (ip->i_refcount == 0) {
             vfs_free_vnode(vp);
         }
     }
     return 0;
+}
+
+/* ========== Directory Operation Wrappers ========== */
+
+int vfs_lookup(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_lookup) return -1;
+    return dir->v_op->vop_lookup(dir, name, result);
+}
+
+int vfs_readdir(struct vnode *dir, struct vfs_dirent *dent, uint64_t *offset) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_readdir) return -1;
+    return dir->v_op->vop_readdir(dir, dent, offset);
+}
+
+int vfs_create(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_create) return -1;
+    return dir->v_op->vop_create(dir, name, result);
+}
+
+int vfs_mkdir(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_mkdir) return -1;
+    return dir->v_op->vop_mkdir(dir, name, result);
+}
+
+int vfs_remove(struct vnode *dir, const char *name) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_remove) return -1;
+    return dir->v_op->vop_remove(dir, name);
+}
+
+/* ========== Path Resolution ========== */
+
+/**
+ * Internal helper: given a starting directory vnode and a relative path
+ * (no leading '/'), walk each component with vop_lookup.
+ */
+static int vfs_walk_path(struct vnode *start, const char *relpath,
+                          struct vnode **result) {
+    if (!start || !relpath || !result) return -1;
+
+    struct vnode *cur = start;
+
+    /* Empty relative path means the start node itself */
+    if (relpath[0] == '\0') {
+        *result = cur;
+        return 0;
+    }
+
+    /* Work on a mutable copy of the remaining path */
+    char buf[MAX_PATH];
+    size_t len = strlen(relpath);
+    if (len >= MAX_PATH) return -1;
+    memcpy(buf, relpath, len + 1);
+
+    /* Walk each component */
+    char *p = buf;
+    while (*p) {
+        /* Skip leading slashes */
+        while (*p == '/') p++;
+        if (*p == '\0') break;   /* Trailing slash */
+
+        /* Find end of this component */
+        char *end = p;
+        while (*end && *end != '/') end++;
+
+        /* Null-terminate this component */
+        int more = (*end == '/');
+        *end = '\0';
+
+        /* Current node must be a directory */
+        if (cur->v_type != VDIR) return -2;  /* ENOTDIR */
+
+        /* Lookup */
+        struct vnode *child = NULL;
+        int ret = vfs_lookup(cur, p, &child);
+        if (ret != 0) return ret;  /* ENOENT or other error */
+
+        cur = child;
+        p = more ? end + 1 : end;
+    }
+
+    *result = cur;
+    return 0;
+}
+
+int vfs_resolve_path(const char *path, struct vnode **result) {
+    if (!path || !result || path[0] != '/') return -1;
+
+    /* Find the mount point that covers this path */
+    struct mount_entry *me = mount_lookup(path);
+    if (!me || !me->root) {
+        uart_puts("[VFS] resolve: no mount for path '");
+        uart_puts(path);
+        uart_puts("'\n");
+        return -1;
+    }
+
+    /* Strip the mount prefix to get the relative path within that FS */
+    const char *rel = path + strlen(me->path);
+    /* If mount is "/" the rel already starts right; otherwise skip
+       the leading '/' that remains after stripping "/mnt/fat" from
+       "/mnt/fat/dir/file" -> "/dir/file" -> skip the '/' */
+    while (*rel == '/') rel++;
+
+    return vfs_walk_path(me->root, rel, result);
+}
+
+int vfs_resolve_parent(const char *path, struct vnode **parent,
+                        char *name_out, size_t name_max) {
+    if (!path || !parent || !name_out || name_max == 0 || path[0] != '/') {
+        return -1;
+    }
+
+    /* Find the last '/' to split into parent-path and filename */
+    size_t path_len = strlen(path);
+    /* Ignore any trailing slash */
+    while (path_len > 1 && path[path_len - 1] == '/') path_len--;
+
+    /* Find last separator */
+    size_t last_sep = 0;
+    for (size_t i = 0; i < path_len; i++) {
+        if (path[i] == '/') last_sep = i;
+    }
+
+    /* Extract the final component */
+    const char *name_start = path + last_sep + 1;
+    size_t name_len = path_len - last_sep - 1;
+    if (name_len == 0 || name_len >= name_max) return -1;
+    memcpy(name_out, name_start, name_len);
+    name_out[name_len] = '\0';
+
+    /* Build parent path */
+    char parent_path[MAX_PATH];
+    if (last_sep == 0) {
+        /* Parent is root "/" */
+        parent_path[0] = '/';
+        parent_path[1] = '\0';
+    } else {
+        if (last_sep >= MAX_PATH) return -1;
+        memcpy(parent_path, path, last_sep);
+        parent_path[last_sep] = '\0';
+    }
+
+    return vfs_resolve_path(parent_path, parent);
 }
 
 /* ========== RAMFS Implementation Using Block Device ========== */

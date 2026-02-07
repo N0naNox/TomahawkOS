@@ -17,6 +17,8 @@
 #include "include/hal_port_io.h"
 #include <uart.h>
 #include "include/vga.h"
+#include "include/ata.h"
+#include "include/fat32.h"
 
 extern volatile int demo_stop_requested;
 extern void demo_esc_watcher(void);
@@ -636,6 +638,260 @@ void run_block_device_demo(void) {
     }
 }
 
+/* ========== FAT32 Filesystem Demo ========== */
+
+void run_fat32_demo(void) {
+    vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+    vga_write("=== FAT32 Filesystem Demo ===\n\n");
+
+    char num[32];
+
+    /* Step 1: Initialize ATA driver */
+    vga_write("1. Initializing ATA PIO driver...\n");
+    ata_init();
+    struct block_device *dev = ata_get_block_device(0);
+    if (!dev) {
+        vga_write("   [ERROR] No ATA disk found!\n");
+        vga_write("Press ESC to return.\n");
+        goto fat32_wait_esc;
+    }
+    vga_write("   [OK] ATA drive 0 detected\n\n");
+
+    /* Step 2: Register FAT32 and mount */
+    vga_write("2. Mounting FAT32 volume...\n");
+    fat32_register();
+    struct vnode *fat_root = fat32_mount(dev, 0);
+    if (!fat_root) {
+        vga_write("   [ERROR] FAT32 mount failed!\n");
+        vga_write("Press ESC to return.\n");
+        goto fat32_wait_esc;
+    }
+    vga_write("   [OK] Volume mounted successfully\n\n");
+
+    /* Step 3: List root directory */
+    vga_write("3. Root directory listing:\n");
+    vga_write("   Name               Type      Size\n");
+    vga_write("   ------------------ --------- --------\n");
+    {
+        struct vfs_dirent dent;
+        uint64_t offset = 0;
+        int count = 0;
+        while (vfs_readdir(fat_root, &dent, &offset) == 0) {
+            vga_write("   ");
+            /* Pad name to 19 chars */
+            int nlen = 0;
+            while (dent.d_name[nlen]) nlen++;
+            vga_write(dent.d_name);
+            for (int pad = nlen; pad < 19; pad++) vga_write(" ");
+            /* Type */
+            if (dent.d_type == VDIR)
+                vga_write("DIR       ");
+            else
+                vga_write("FILE      ");
+            /* Size */
+            int_to_str((int)dent.d_size, num, 10);
+            vga_write(num);
+            vga_write("\n");
+            count++;
+        }
+        vga_write("   (");
+        int_to_str(count, num, 10);
+        vga_write(num);
+        vga_write(" entries)\n\n");
+    }
+
+    /* Step 4: Read hello.txt */
+    vga_write("4. Reading /hello.txt...\n");
+    {
+        struct vnode *hello = NULL;
+        int rc = vfs_lookup(fat_root, "hello.txt", &hello);
+        if (rc == 0 && hello) {
+            int64_t sz = vfs_getsize(hello);
+            vga_write("   Size: ");
+            int_to_str((int)sz, num, 10);
+            vga_write(num);
+            vga_write(" bytes\n");
+            char buf[256];
+            int n = (sz < 255) ? (int)sz : 255;
+            int rd = vfs_read_at(hello, buf, (size_t)n, 0);
+            if (rd > 0) {
+                buf[rd] = '\0';
+                vga_write("   Content: \"");
+                vga_write(buf);
+                vga_write("\"\n");
+            } else {
+                vga_write("   [ERROR] read returned ");
+                int_to_str(rd, num, 10);
+                vga_write(num);
+                vga_write("\n");
+            }
+        } else {
+            vga_write("   [SKIP] hello.txt not found (rc=");
+            int_to_str(rc, num, 10);
+            vga_write(num);
+            vga_write(")\n");
+        }
+        vga_write("\n");
+    }
+
+    /* Step 5: Read a file from subdirectory */
+    vga_write("5. Reading /docs/readme.txt via lookup chain...\n");
+    {
+        struct vnode *docs = NULL;
+        int rc = vfs_lookup(fat_root, "docs", &docs);
+        if (rc == 0 && docs) {
+            struct vnode *readme = NULL;
+            rc = vfs_lookup(docs, "readme.txt", &readme);
+            if (rc == 0 && readme) {
+                char buf[256];
+                int64_t sz = vfs_getsize(readme);
+                int n = (sz < 255) ? (int)sz : 255;
+                int rd = vfs_read_at(readme, buf, (size_t)n, 0);
+                if (rd > 0) {
+                    buf[rd] = '\0';
+                    vga_write("   Content: \"");
+                    vga_write(buf);
+                    vga_write("\"\n");
+                } else {
+                    vga_write("   [ERROR] read failed\n");
+                }
+            } else {
+                vga_write("   [SKIP] readme.txt not found in /docs\n");
+            }
+        } else {
+            vga_write("   [SKIP] /docs directory not found\n");
+        }
+        vga_write("\n");
+    }
+
+    /* Step 6: Create a new file and write to it */
+    vga_write("6. Creating /NEWFILE.TXT and writing data...\n");
+    {
+        struct vnode *newfile = NULL;
+        int rc = vfs_create(fat_root, "NEWFILE.TXT", &newfile);
+        if (rc == 0 && newfile) {
+            const char *msg = "Written by TomahawkOS FAT32 driver!";
+            int nlen = 0;
+            while (msg[nlen]) nlen++;
+            int wr = vfs_write_at(newfile, msg, (size_t)nlen, 0);
+            vga_write("   Wrote ");
+            int_to_str(wr, num, 10);
+            vga_write(num);
+            vga_write(" bytes\n");
+
+            /* Read it back to verify */
+            char verify[128] = {0};
+            int rd = vfs_read_at(newfile, verify, (size_t)wr, 0);
+            if (rd > 0) {
+                verify[rd] = '\0';
+                vga_write("   Readback: \"");
+                vga_write(verify);
+                vga_write("\"\n");
+            }
+        } else {
+            vga_write("   [ERROR] create failed (rc=");
+            int_to_str(rc, num, 10);
+            vga_write(num);
+            vga_write(")\n");
+        }
+        vga_write("\n");
+    }
+
+    /* Step 7: Create a subdirectory */
+    vga_write("7. Creating /TESTDIR directory...\n");
+    {
+        struct vnode *testdir = NULL;
+        int rc = vfs_mkdir(fat_root, "TESTDIR", &testdir);
+        if (rc == 0 && testdir) {
+            vga_write("   [OK] Directory created\n");
+            /* List it to show . and .. */
+            struct vfs_dirent dent;
+            uint64_t offset = 0;
+            int count = 0;
+            while (vfs_readdir(testdir, &dent, &offset) == 0) {
+                vga_write("   -> ");
+                vga_write(dent.d_name);
+                vga_write("\n");
+                count++;
+            }
+            vga_write("   (");
+            int_to_str(count, num, 10);
+            vga_write(num);
+            vga_write(" entries)\n");
+        } else {
+            vga_write("   [ERROR] mkdir failed (rc=");
+            int_to_str(rc, num, 10);
+            vga_write(num);
+            vga_write(")\n");
+        }
+        vga_write("\n");
+    }
+
+    /* Step 8: Remove the file we created */
+    vga_write("8. Removing /NEWFILE.TXT...\n");
+    {
+        int rc = vfs_remove(fat_root, "NEWFILE.TXT");
+        if (rc == 0) {
+            vga_write("   [OK] File removed\n");
+            /* Verify it's gone */
+            struct vnode *gone = NULL;
+            rc = vfs_lookup(fat_root, "NEWFILE.TXT", &gone);
+            if (rc != 0) {
+                vga_write("   [OK] Verified: lookup returns error\n");
+            } else {
+                vga_write("   [WARN] File still found after remove\n");
+            }
+        } else {
+            vga_write("   [ERROR] remove failed (rc=");
+            int_to_str(rc, num, 10);
+            vga_write(num);
+            vga_write(")\n");
+        }
+        vga_write("\n");
+    }
+
+    /* Step 9: Show buffer cache stats */
+    vga_write("9. Buffer cache statistics:\n");
+    {
+        struct buffer_cache_stats stats;
+        buffer_cache_get_stats(&stats);
+        vga_write("   Hits=");
+        int_to_str(stats.hits, num, 10);
+        vga_write(num);
+        vga_write("  Misses=");
+        int_to_str(stats.misses, num, 10);
+        vga_write(num);
+        vga_write("  Cached=");
+        int_to_str(stats.cached_blocks, num, 10);
+        vga_write(num);
+        vga_write("  Dirty=");
+        int_to_str(stats.dirty_blocks, num, 10);
+        vga_write(num);
+        vga_write("\n\n");
+    }
+
+    /* Step 10: Sync and unmount */
+    vga_write("10. Syncing and unmounting...\n");
+    fat32_sync(fat_root);
+    fat32_unmount(fat_root);
+    vga_write("    [OK] Volume unmounted\n\n");
+
+    vga_write("=== FAT32 Demo Complete! ===\n");
+    vga_write("Press ESC to return.\n");
+
+fat32_wait_esc:
+    /* Poll for ESC */
+    while (1) {
+        if (hal_inb(0x64) & 0x01) {
+            uint8_t scancode = hal_inb(0x60);
+            if (scancode == 0x01) {
+                break;
+            }
+        }
+        __asm__ volatile("pause");
+    }
+}
+
 /* ========== User Mode Password Demo ========== */
 
 /* Helper to emit a syscall: mov rax, num; syscall */
@@ -752,6 +1008,7 @@ void run_tomahawk_shell(void) {
         "  whoami    - Show current user\n"
         "  clear     - Clear the screen\n"
         "  vfs       - Run VFS filesystem demo\n"
+        "  fat32     - Run FAT32 filesystem demo\n"
         "  tests     - Run kernel unit tests\n"
         "  exit      - Exit shell and return to kernel\n\n")
     PLACE_STR(s_prompt_guest, "guest@tomahawk> ")
@@ -777,6 +1034,7 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_cmd_exit, "exit")
     PLACE_STR(s_cmd_vfs, "vfs")
     PLACE_STR(s_cmd_tests, "tests")
+    PLACE_STR(s_cmd_fat32, "fat32")
     PLACE_STR(s_demo_done, "\n[Demo complete. Press any key to continue...]\n")
     
     #undef PLACE_STR
@@ -1294,6 +1552,36 @@ void run_tomahawk_shell(void) {
         not_tests[3] = (off >> 24) & 0xFF;
     }
     
+    /* ===== Check "fat32" ===== */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_fat32);
+    uint8_t *cmp_fat32 = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *not_fat32 = p; p += 4; /* JNE near */
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_fat32 = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_fat32_off = (int8_t)(cmp_fat32 - p - 1);
+    *p++ = (uint8_t)cmp_fat32_off;
+    *is_fat32 = (uint8_t)(p - is_fat32 - 1);
+    /* Call syscall 27 (SYS_RUN_FAT32_DEMO) */
+    p = emit_syscall_only(p, 27);
+    p = emit_print(p, s_demo_done, s_demo_done_len);
+    p = emit_syscall_only(p, 14);
+    *p++ = 0xE9; uint8_t *jloop_fat32 = p; p += 4;
+    /* Patch not_fat32 */
+    {
+        int32_t off = (int32_t)(p - not_fat32 - 4);
+        not_fat32[0] = off & 0xFF;
+        not_fat32[1] = (off >> 8) & 0xFF;
+        not_fat32[2] = (off >> 16) & 0xFF;
+        not_fat32[3] = (off >> 24) & 0xFF;
+    }
+    
     /* Unknown command */
     p = emit_print(p, s_unknown, s_unknown_len);
     
@@ -1331,6 +1619,7 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP(jloop10);
     PATCH_JLOOP(jloop_vfs);
     PATCH_JLOOP(jloop_tests);
+    PATCH_JLOOP(jloop_fat32);
     
     #undef PATCH_JLOOP
     

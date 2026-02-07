@@ -317,4 +317,33 @@ int fat32_unmount(struct vnode *root);
  */
 int fat32_sync(struct vnode *root);
 
+/* ========== FAT Table Helpers ========== */
+
+/** Read the FAT entry for a cluster. Returns 28-bit value, 0 on error. */
+uint32_t fat32_fat_read(struct fat32_mount *mnt, uint32_t cluster);
+
+/** Write a FAT entry (mirrors to all FAT copies). */
+int fat32_fat_write(struct fat32_mount *mnt, uint32_t cluster, uint32_t value);
+
+/** Follow a cluster chain for n links. Returns cluster reached, 0 on EOC/error. */
+uint32_t fat32_follow_chain(struct fat32_mount *mnt, uint32_t start, uint32_t n);
+
+/** Count clusters in a chain starting at 'start'. */
+uint32_t fat32_chain_length(struct fat32_mount *mnt, uint32_t start);
+
+/** Allocate one free cluster (sets it to EOC). Returns cluster number, 0 on failure. */
+uint32_t fat32_alloc_cluster(struct fat32_mount *mnt);
+
+/** Extend a chain by one cluster after 'last_cluster'. Returns new cluster, 0 on failure. */
+uint32_t fat32_extend_chain(struct fat32_mount *mnt, uint32_t last_cluster);
+
+/** Free an entire cluster chain. */
+int fat32_free_chain(struct fat32_mount *mnt, uint32_t start);
+
+/** Read one cluster's data into buf (must be >= cluster_size). */
+int fat32_read_cluster(struct fat32_mount *mnt, uint32_t cluster, void *buf);
+
+/** Write one cluster's data from buf (must be >= cluster_size). */
+int fat32_write_cluster(struct fat32_mount *mnt, uint32_t cluster, const void *buf);
+
 #endif /* FAT32_H */

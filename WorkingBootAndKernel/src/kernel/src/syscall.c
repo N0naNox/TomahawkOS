@@ -273,6 +273,12 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             run_kernel_tests();
             return 0;
 
+        case SYS_RUN_FAT32_DEMO:
+            /* Run FAT32 filesystem demo from shell */
+            vga_write("\n");
+            run_fat32_demo();
+            return 0;
+
         case 99:
             /* Exit from usermode password demo - return to kernel */
             __asm__ volatile(

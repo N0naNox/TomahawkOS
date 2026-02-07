@@ -30,4 +30,7 @@ void run_tomahawk_shell(void);
 /* Run scheduler demo - shows multi-threaded scheduling */
 void run_scheduler_demo(void);
 
+/* Run FAT32 filesystem demo - reads from real ATA disk */
+void run_fat32_demo(void);
+
 #endif /* DEMOS_H */
