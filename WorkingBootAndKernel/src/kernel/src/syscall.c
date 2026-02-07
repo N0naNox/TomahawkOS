@@ -279,6 +279,38 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             run_fat32_demo();
             return 0;
 
+        case SYS_FAT32_MOUNT:
+            shell_fat32_mount();
+            return 0;
+
+        case SYS_FAT32_UMOUNT:
+            shell_fat32_umount();
+            return 0;
+
+        case SYS_FAT32_LS:
+            shell_fat32_ls();
+            return 0;
+
+        case SYS_FAT32_CAT:
+            shell_fat32_cat();
+            return 0;
+
+        case SYS_FAT32_WRITE:
+            shell_fat32_write();
+            return 0;
+
+        case SYS_FAT32_MKDIR:
+            shell_fat32_mkdir();
+            return 0;
+
+        case SYS_FAT32_RM:
+            shell_fat32_rm();
+            return 0;
+
+        case SYS_FAT32_CD:
+            shell_fat32_cd();
+            return 0;
+
         case 99:
             /* Exit from usermode password demo - return to kernel */
             __asm__ volatile(

@@ -28,3 +28,13 @@
 #define SYS_RUN_VFS_DEMO 25
 #define SYS_RUN_TESTS 26
 #define SYS_RUN_FAT32_DEMO 27
+
+/* FAT32 shell commands */
+#define SYS_FAT32_MOUNT  30
+#define SYS_FAT32_UMOUNT 31
+#define SYS_FAT32_LS     32
+#define SYS_FAT32_CAT    33
+#define SYS_FAT32_WRITE  34
+#define SYS_FAT32_MKDIR  35
+#define SYS_FAT32_RM     36
+#define SYS_FAT32_CD     37

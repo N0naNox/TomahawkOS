@@ -33,4 +33,14 @@ void run_scheduler_demo(void);
 /* Run FAT32 filesystem demo - reads from real ATA disk */
 void run_fat32_demo(void);
 
+/* FAT32 shell commands - individual operations */
+void shell_fat32_mount(void);
+void shell_fat32_umount(void);
+void shell_fat32_ls(void);
+void shell_fat32_cat(void);
+void shell_fat32_write(void);
+void shell_fat32_mkdir(void);
+void shell_fat32_rm(void);
+void shell_fat32_cd(void);
+
 #endif /* DEMOS_H */
