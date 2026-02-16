@@ -14,4 +14,7 @@ uint64_t sys_exit(void);
 uint64_t sys_getpid(void);
 uint64_t sys_kill(uint64_t pid, int signo);
 uint64_t sys_signal(int signo, sig_handler_t handler);
+uint64_t sys_exec(const char* path, char* const argv[]);
+uint64_t sys_wait(int* status);
+uint64_t sys_waitpid(int pid, int* status, int options);
 

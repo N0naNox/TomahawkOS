@@ -159,8 +159,32 @@ void scheduler_tick(regs_t* r) {
 }
 
 void scheduler_thread_exit(void) {
-    /* Mark current as ZOMBIE and pick next */
-    if (current) current->state = THREAD_ZOMBIE;
+    /* Mark current thread as ZOMBIE */
+    if (current) {
+        current->state = THREAD_ZOMBIE;
+        
+        /* Mark parent process as zombie if this is the main thread */
+        if (current->parent) {
+            pcb_t* proc = current->parent;
+            if (proc->main_thread == current) {
+                proc->is_zombie = 1;
+                
+                /* Wake up waiting parent if any */
+                if (proc->parent && proc->parent->wait_queue) {
+                    tcb_t* waiting_parent = proc->parent->wait_queue;
+                    proc->parent->wait_queue = NULL;
+                    
+                    /* Add waiting parent back to ready queue */
+                    if (waiting_parent->state == THREAD_BLOCKED) {
+                        waiting_parent->state = THREAD_READY;
+                        scheduler_add_thread(waiting_parent);
+                    }
+                }
+            }
+        }
+    }
+    
+    /* Pick next thread */
     tcb_t* next = dequeue_next();
     if (!next) {
         /* No ready thread: hang */

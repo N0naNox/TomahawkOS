@@ -18,6 +18,9 @@ void run_signal_demo(void);
 /* Run combined COW + signals demo */
 void run_combined_cow_signals_demo(void);
 
+/* Run fork-exec-wait demo */
+void run_fork_exec_wait_demo(void);
+
 /* Run user mode transition demo */
 void run_usermode_demo(void);
 

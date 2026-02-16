@@ -58,3 +58,15 @@ uint64_t sys_signal(int signo, sig_handler_t handler) {
     proc->signals.handlers[signo] = handler;
     return (uint64_t)old;
 }
+
+uint64_t sys_exec(const char* path, char* const argv[]) {
+    return (uint64_t)exec_process(path, argv);
+}
+
+uint64_t sys_wait(int* status) {
+    return (uint64_t)wait_process(status);
+}
+
+uint64_t sys_waitpid(int pid, int* status, int options) {
+    return (uint64_t)waitpid_process(pid, status, options);
+}
