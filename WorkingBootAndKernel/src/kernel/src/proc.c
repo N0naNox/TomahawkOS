@@ -5,6 +5,9 @@
 #include "paging.h"
 #include <stdint.h>
 #include "include/scheduler.h"
+#include "include/elf_loader.h"
+#include "include/vfs.h"
+#include "include/frame_alloc.h"
 #include <uart.h>
 
 /* Kernel stack size per thread */
@@ -198,6 +201,10 @@ int fork_process(void) {
     child->next = process_list;
     process_list = child;
     
+    /* Add child to parent's children list */
+    child->sibling_next = parent->children;
+    parent->children = child;
+    
     uart_puts("fork: created child process ");
     uart_putu(child->pid);
     uart_puts("\n");
@@ -216,4 +223,128 @@ pcb_t* find_process_by_pid(uint64_t pid) {
         p = p->next;
     }
     return NULL;
+}
+
+/* Replace current process image with new executable from file */
+int exec_process(const char* path, char* const argv[]) {
+    uart_puts("exec: loading ");
+    uart_puts(path);
+    uart_puts("\n");
+    
+    pcb_t* proc = get_current_process();
+    if (!proc) {
+        uart_puts("exec: no current process\n");
+        return -1;
+    }
+    
+    /* TODO: Open file from VFS - for now, return error if path is NULL */
+    if (!path) {
+        uart_puts("exec: NULL path\n");
+        return -1;
+    }
+    
+    /* For now, we'll assume the executable data is already in memory
+     * In a full implementation, you would:
+     * 1. Open the file using VFS
+     * 2. Read the entire ELF into a buffer
+     * 3. Load it using elf_load_executable_mm
+     * 4. Free the buffer
+     */
+    
+    /* Placeholder: In real implementation, load from VFS */
+    uart_puts("exec: file loading not fully implemented - needs VFS integration\n");
+    (void)argv;  /* Suppress unused warning */
+    
+    /* The actual exec would:
+     * 1. Destroy current address space
+     * 2. Create new address space
+     * 3. Load ELF file
+     * 4. Set up user stack with argc/argv
+     * 5. Jump to entry point
+     */
+    
+    return -1;  /* Not implemented yet */
+}
+
+/* Wait for child process to exit */
+int wait_process(int* status) {
+    return waitpid_process(-1, status, 0);
+}
+
+/* Wait for specific child process or any child */
+int waitpid_process(int pid, int* status, int options) {
+    pcb_t* parent = get_current_process();
+    if (!parent) {
+        uart_puts("wait: no current process\n");
+        return -1;
+    }
+    
+    uart_puts("wait: PID ");
+    uart_putu(parent->pid);
+    uart_puts(" waiting for child ");
+    if (pid == -1) {
+        uart_puts("(any)\n");
+    } else {
+        uart_putu(pid);
+        uart_puts("\n");
+    }
+    
+    /* Check if there are any children */
+    if (!parent->children) {
+        uart_puts("wait: no children\n");
+        return -1;  /* ECHILD - no children */
+    }
+    
+    /* Look for a zombie child matching the criteria */
+    pcb_t* prev = NULL;
+    pcb_t* child = parent->children;
+    
+    while (child) {
+        /* Check if this child matches */
+        int matches = (pid == -1) || (child->pid == (uint64_t)pid);
+        
+        if (matches && child->is_zombie) {
+            uart_puts("wait: found zombie child PID ");
+            uart_putu(child->pid);
+            uart_puts(" with exit code ");
+            uart_putu(child->exit_code);
+            uart_puts("\n");
+            
+            /* Store exit status */
+            if (status) {
+                *status = child->exit_code;
+            }
+            
+            uint64_t child_pid = child->pid;
+            
+            /* Remove child from parent's children list */
+            if (prev) {
+                prev->sibling_next = child->sibling_next;
+            } else {
+                parent->children = child->sibling_next;
+            }
+            
+            /* TODO: Free child's resources (mm, threads, etc.) */
+            /* For now, we just mark it as reaped */
+            
+            return (int)child_pid;
+        }
+        
+        prev = child;
+        child = child->sibling_next;
+    }
+    
+    /* No zombie child found */
+    (void)options;  /* TODO: handle WNOHANG option */
+    
+    /* In a real implementation, we would block the parent thread here
+     * and wake it up when a child exits. For simplicity, we return -1. */
+    uart_puts("wait: no zombie children (blocking not implemented)\n");
+    
+    /* Store current thread in wait queue (for future implementation) */
+    parent->wait_queue = scheduler_current();
+    
+    /* TODO: Block current thread and yield to scheduler */
+    /* For now, just return error */
+    return -1;  /* EAGAIN or would block */
 }

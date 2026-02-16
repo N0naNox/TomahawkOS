@@ -58,6 +58,12 @@ typedef struct pcb {
     struct pcb* parent;         /* parent process (for SIGCHLD) */
     int exit_code;              /* exit status */
     int is_fork_child;          /* 1 if this is a newly forked child */
+    
+    /* Process state for wait() */
+    int is_zombie;              /* 1 if process has exited but not reaped */
+    struct pcb* children;       /* list of child processes */
+    struct pcb* sibling_next;   /* next sibling in parent's children list */
+    tcb_t* wait_queue;          /* thread waiting for this process (parent) */
 } pcb_t;
 
 /* API */
@@ -66,6 +72,15 @@ tcb_t* create_thread(pcb_t* proc, void (*entry)(void));
 
 /* Fork current process with COW (returns child PID or 0 in child, -1 on error) */
 int fork_process(void);
+
+/* Replace current process image with new executable from file */
+int exec_process(const char* path, char* const argv[]);
+
+/* Wait for child process to exit (returns child PID or -1, stores exit status) */
+int wait_process(int* status);
+
+/* Wait for specific child process (pid > 0) or any child (pid = -1) */
+int waitpid_process(int pid, int* status, int options);
 
 /* Get current process */
 pcb_t* get_current_process(void);

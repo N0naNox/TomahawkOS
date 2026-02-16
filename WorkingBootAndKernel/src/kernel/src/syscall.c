@@ -122,6 +122,18 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
         case SYS_SIGRETURN:
             return (uint64_t)signal_return(get_current_process(), regs);
 
+        case SYS_EXEC:
+            /* arg1 = path, arg2 = argv */
+            return sys_exec((const char*)arg1, (char* const*)arg2);
+
+        case SYS_WAIT:
+            /* arg1 = status pointer */
+            return sys_wait((int*)arg1);
+
+        case SYS_WAITPID:
+            /* arg1 = pid, arg2 = status, arg3 = options */
+            return sys_waitpid((int)arg1, (int*)arg2, (int)arg3);
+
         case SYS_PASS_VERIFY:
             /* arg1 = username, arg2 = password */
             return (uint64_t)password_store_verify((const char*)arg1, (const char*)arg2);
@@ -271,6 +283,12 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             /* Run kernel tests from shell */
             vga_write("\n");
             run_kernel_tests();
+            return 0;
+
+        case SYS_RUN_FORK_EXEC_WAIT_DEMO:
+            /* Run fork-exec-wait demo from shell */
+            vga_write("\n");
+            run_fork_exec_wait_demo();
             return 0;
 
         case 99:

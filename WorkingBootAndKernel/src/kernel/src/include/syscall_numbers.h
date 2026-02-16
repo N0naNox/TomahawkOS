@@ -27,3 +27,9 @@
    scheduling which corrupts the syscall return path when context switches occur */
 #define SYS_RUN_VFS_DEMO 25
 #define SYS_RUN_TESTS 26
+#define SYS_RUN_FORK_EXEC_WAIT_DEMO 30
+
+/* Process execution syscalls */
+#define SYS_EXEC 27
+#define SYS_WAIT 28
+#define SYS_WAITPID 29

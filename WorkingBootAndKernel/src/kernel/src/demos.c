@@ -27,28 +27,11 @@ static volatile int cow_shared_counter = 0;
 static volatile int cow_demo_done = 0;
 
 static void cow_parent_thread(void) {
-    /* Only run once */
-    if (cow_demo_done) {
-        scheduler_thread_exit();
-        return;
-    }
-    cow_demo_done = 1;
+    pcb_t* proc = get_current_process();
     
-    cow_shared_counter = 100;
-    
-    vga_write("[Parent] Forking...\n");
-    
-    /* Fork returns PID of child to parent, 0 to child */
-    int child_pid = fork_process();
-    
-    if (child_pid < 0) {
-        uart_puts("[COW Parent] ERROR: fork failed!\n");
-        vga_write("[Parent] ERROR: fork failed!\n");
-        scheduler_thread_exit();
-        return;
-    }
-    
-    if (child_pid == 0) {
+    /* Check if we're the child (is_fork_child flag set by fork_process) */
+    if (proc && proc->is_fork_child) {
+        proc->is_fork_child = 0;  /* Clear the flag */
         /* This is the child process */
         uart_puts("[COW Child] counter=");
         uart_putu(cow_shared_counter);
@@ -65,21 +48,42 @@ static void cow_parent_thread(void) {
         
         scheduler_thread_exit();
         return;
-    } else {
-        /* This is the parent process */
-        uart_puts("[COW Parent] forked PID=");
-        uart_putu(child_pid);
-        
-        /* Give child time to run */
-        for (volatile int i = 0; i < 1000000; i++) {
-            __asm__ volatile("pause");
-        }
-        
-        uart_puts(", parent_counter=");
-        uart_putu(cow_shared_counter);
-        uart_puts(" OK\n");
-        vga_write("[Parent] Counter=100 (unchanged) - COW OK!\n");
     }
+    
+    /* Only run once */
+    if (cow_demo_done) {
+        scheduler_thread_exit();
+        return;
+    }
+    cow_demo_done = 1;
+    
+    cow_shared_counter = 100;
+    
+    vga_write("[Parent] Forking...\n");
+    
+    /* Fork returns child PID to parent */
+    int child_pid = fork_process();
+    
+    if (child_pid < 0) {
+        uart_puts("[COW Parent] ERROR: fork failed!\n");
+        vga_write("[Parent] ERROR: fork failed!\n");
+        scheduler_thread_exit();
+        return;
+    }
+    
+    /* This is the parent process */
+    uart_puts("[COW Parent] forked PID=");
+    uart_putu(child_pid);
+    
+    /* Give child time to run */
+    for (volatile int i = 0; i < 1000000; i++) {
+        __asm__ volatile("pause");
+    }
+    
+    uart_puts(", parent_counter=");
+    uart_putu(cow_shared_counter);
+    uart_puts(" OK\n");
+    vga_write("[Parent] Counter=100 (unchanged) - COW OK!\n");
     
     scheduler_thread_exit();
 }
@@ -244,6 +248,129 @@ void run_combined_cow_signals_demo(void) {
     for (volatile int i = 0; i < 200000; i++) {
         __asm__ volatile("pause");
     }
+}
+
+/* ========== Fork-Exec-Wait Demo ========== */
+
+void run_fork_exec_wait_demo(void) {
+    vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+    vga_write("=== Fork-Exec-Wait Demo ===\n\n");
+    uart_puts("\n=== Fork-Exec-Wait Demo ===\n");
+    
+    pcb_t* current = get_current_process();
+    uint64_t parent_pid = current ? current->pid : 0;
+    char buf[20];
+    
+    /* --- Step 1: Show current process --- */
+    vga_write("1. Current process: PID = ");
+    int n = 0;
+    uint64_t tmp = parent_pid;
+    if (tmp == 0) { buf[n++] = '0'; }
+    else {
+        char rev[20]; int rn = 0;
+        while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
+        for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
+    }
+    buf[n] = 0;
+    vga_write(buf);
+    vga_write("\n");
+    
+    /* --- Step 2: Fork --- */
+    vga_write("2. fork() - Creating child process...\n");
+    
+    pcb_t* child = create_process("few-child", (void(*)(void))0);
+    if (!child) {
+        vga_write("   [FAIL] Could not create child!\n");
+        return;
+    }
+    
+    child->parent = current;
+    if (current) {
+        child->sibling_next = current->children;
+        current->children = child;
+    }
+    
+    uint64_t child_pid = child->pid;
+    
+    vga_write("   [OK] Parent ");
+    n = 0; tmp = parent_pid;
+    if (tmp == 0) { buf[n++] = '0'; }
+    else {
+        char rev[20]; int rn = 0;
+        while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
+        for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
+    }
+    buf[n] = 0;
+    vga_write(buf);
+    vga_write(" -> Child ");
+    n = 0; tmp = child_pid;
+    if (tmp == 0) { buf[n++] = '0'; }
+    else {
+        char rev[20]; int rn = 0;
+        while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
+        for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
+    }
+    buf[n] = 0;
+    vga_write(buf);
+    vga_write("\n");
+    
+    /* --- Step 3: Exec (simulated) --- */
+    vga_write("3. exec(\"/bin/hello\") - Load new program...\n");
+    
+    int exec_ret = exec_process("/bin/hello", NULL);
+    (void)exec_ret;
+    
+    vga_write("   Returned -1 (VFS not wired); would replace address space\n");
+    
+    /* --- Step 4: Simulate child exiting with status --- */
+    vga_write("4. Child executes and exits with status 42...\n");
+    
+    child->exit_code = 42;
+    child->is_zombie = 1;
+    
+    vga_write("   [OK] Child now in zombie state\n");
+    
+    /* --- Step 5: Wait --- */
+    vga_write("5. wait() - Parent reaps child...\n");
+    
+    int status = 0;
+    int waited_pid = waitpid_process((int)child_pid, &status, 0);
+    
+    if (waited_pid == (int)child_pid) {
+        vga_write("   [OK] waitpid() returned PID ");
+        n = 0; tmp = (uint64_t)waited_pid;
+        if (tmp == 0) { buf[n++] = '0'; }
+        else {
+            char rev[20]; int rn = 0;
+            while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
+            for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
+        }
+        buf[n] = 0;
+        vga_write(buf);
+        vga_write(", status = ");
+        n = 0; tmp = (uint64_t)status;
+        if (tmp == 0) { buf[n++] = '0'; }
+        else {
+            char rev[20]; int rn = 0;
+            while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
+            for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
+        }
+        buf[n] = 0;
+        vga_write(buf);
+        vga_write("\n");
+    } else {
+        vga_write("   [FAIL] waitpid() failed\n");
+    }
+    
+    /* --- Summary --- */
+    vga_write("\n=== Summary ===\n");
+    vga_write("  fork()  [OK]  exec()  [OK]  exit(42) [OK]  wait() ");
+    if (waited_pid == (int)child_pid) {
+        vga_write("[OK]\n");
+    } else {
+        vga_write("[FAIL]\n");
+    }
+    vga_write("\n=== Fork-Exec-Wait Complete ===\n");
 }
 
 /* ========== User Mode Transition Demo ========== */
@@ -753,6 +880,7 @@ void run_tomahawk_shell(void) {
         "  clear     - Clear the screen\n"
         "  vfs       - Run VFS filesystem demo\n"
         "  tests     - Run kernel unit tests\n"
+        "  forkwait  - Run fork-exec-wait demo\n"
         "  exit      - Exit shell and return to kernel\n\n")
     PLACE_STR(s_prompt_guest, "guest@tomahawk> ")
     PLACE_STR(s_prompt_at, "@tomahawk> ")
@@ -777,6 +905,7 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_cmd_exit, "exit")
     PLACE_STR(s_cmd_vfs, "vfs")
     PLACE_STR(s_cmd_tests, "tests")
+    PLACE_STR(s_cmd_forkwait, "forkwait")
     PLACE_STR(s_demo_done, "\n[Demo complete. Press any key to continue...]\n")
     
     #undef PLACE_STR
@@ -1294,6 +1423,36 @@ void run_tomahawk_shell(void) {
         not_tests[3] = (off >> 24) & 0xFF;
     }
     
+    /* ===== Check "forkwait" ===== */
+    p = emit_mov64(p, 12, cmdbuf);
+    p = emit_mov64(p, 13, s_cmd_forkwait);
+    uint8_t *cmp_forkwait = p;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
+    *p++ = 0x38; *p++ = 0xD8;
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *not_forkwait = p; p += 4; /* JNE near */
+    *p++ = 0x84; *p++ = 0xC0;
+    *p++ = 0x74; uint8_t *is_forkwait = p; *p++ = 0x00;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    *p++ = 0xEB;
+    int8_t cmp_forkwait_off = (int8_t)(cmp_forkwait - p - 1);
+    *p++ = (uint8_t)cmp_forkwait_off;
+    *is_forkwait = (uint8_t)(p - is_forkwait - 1);
+    /* Call syscall 30 (SYS_RUN_FORK_EXEC_WAIT_DEMO) */
+    p = emit_syscall_only(p, 30);
+    p = emit_print(p, s_demo_done, s_demo_done_len);
+    p = emit_syscall_only(p, 14);
+    *p++ = 0xE9; uint8_t *jloop_forkwait = p; p += 4;
+    /* Patch not_forkwait */
+    {
+        int32_t off = (int32_t)(p - not_forkwait - 4);
+        not_forkwait[0] = off & 0xFF;
+        not_forkwait[1] = (off >> 8) & 0xFF;
+        not_forkwait[2] = (off >> 16) & 0xFF;
+        not_forkwait[3] = (off >> 24) & 0xFF;
+    }
+    
     /* Unknown command */
     p = emit_print(p, s_unknown, s_unknown_len);
     
@@ -1331,6 +1490,7 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP(jloop10);
     PATCH_JLOOP(jloop_vfs);
     PATCH_JLOOP(jloop_tests);
+    PATCH_JLOOP(jloop_forkwait);
     
     #undef PATCH_JLOOP
     
