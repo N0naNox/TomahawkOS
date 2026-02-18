@@ -27,7 +27,9 @@ LDFLAGS :=          \
 	-ffreestanding    \
 	-O2               \
 	-nostdlib         \
-	-z max-page-size=0x1000
+	-z max-page-size=0x1000 \
+	-L/usr/local/cross/lib/gcc/x86_64-elf/13.2.0 \
+	-L/usr/local/x86_64-elf/lib/gcc/x86_64-elf/13.2.0
 
 LIBS := -lgcc
 
@@ -70,7 +72,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/vfs.c \
 	${SRC_DIR}/password_store.c \
 	${SRC_DIR}/block_device.c \
-	${SRC_DIR}/mount.c
+	${SRC_DIR}/mount.c \
+	${SRC_DIR}/shell_fs_cmd.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})

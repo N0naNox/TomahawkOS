@@ -878,6 +878,14 @@ void run_tomahawk_shell(void) {
         "  logout    - Log out current user\n"
         "  whoami    - Show current user\n"
         "  clear     - Clear the screen\n"
+        "  ls [path] - List directory contents\n"
+        "  cat <file>- Display file contents\n"
+        "  mkdir <p> - Create a directory\n"
+        "  touch <f> - Create an empty file\n"
+        "  write <f> <text> - Write text to a file\n"
+        "  tree [p]  - Show directory tree\n"
+        "  stat <p>  - Show file/dir info\n"
+        "  pwd       - Print working directory\n"
         "  vfs       - Run VFS filesystem demo\n"
         "  tests     - Run kernel unit tests\n"
         "  forkwait  - Run fork-exec-wait demo\n"
@@ -1453,7 +1461,15 @@ void run_tomahawk_shell(void) {
         not_forkwait[3] = (off >> 24) & 0xFF;
     }
     
-    /* Unknown command */
+    /* Unknown built-in command -> try filesystem commands via SYS_SHELL_CMD */
+    /* rdi = cmdbuf (pointer to command string) */
+    p = emit_mov64(p, 7, cmdbuf);    /* mov rdi, cmdbuf */
+    p = emit_syscall_only(p, 31);    /* SYS_SHELL_CMD */
+    /* Check return value: 0 = handled, -1 = truly unknown */
+    *p++ = 0x48; *p++ = 0x83; *p++ = 0xF8; *p++ = 0xFF; /* cmp rax, -1 */
+    /* JNE -> jump to shell loop (command was handled) */
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *jloop_shellcmd = p; p += 4; /* jne shell_loop */
+    /* If we get here, command is truly unknown */
     p = emit_print(p, s_unknown, s_unknown_len);
     
     /* Jump back to shell loop */
@@ -1491,6 +1507,7 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP(jloop_vfs);
     PATCH_JLOOP(jloop_tests);
     PATCH_JLOOP(jloop_forkwait);
+    PATCH_JLOOP(jloop_shellcmd);
     
     #undef PATCH_JLOOP
     

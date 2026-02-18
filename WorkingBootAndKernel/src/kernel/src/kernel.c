@@ -208,7 +208,10 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	
 	/* Mount system directories (/tmp, /dev) */
 	fs_mount_system_dirs();
-	
+
+	/* Populate root filesystem with standard directories and files */
+	fs_populate_root();
+
 	/* Print mount table for debugging */
 	mount_print_table();
 

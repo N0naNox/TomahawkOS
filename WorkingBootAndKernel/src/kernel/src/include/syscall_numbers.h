@@ -33,3 +33,6 @@
 #define SYS_EXEC 27
 #define SYS_WAIT 28
 #define SYS_WAITPID 29
+
+/* Shell filesystem command dispatch */
+#define SYS_SHELL_CMD 31

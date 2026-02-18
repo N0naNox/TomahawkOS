@@ -32,3 +32,45 @@ int vfs_open(struct vnode* vp);
 int vfs_read(struct vnode* vp, void* buf, size_t nbyte);
 int vfs_write(struct vnode* vp, const void* buf, size_t nbyte);
 int vfs_close(struct vnode* vp);
+
+/* ========== Directory & Path Operations ========== */
+
+/**
+ * @brief Look up a child vnode by name within a directory
+ * @param dir Parent directory vnode
+ * @param name Child name to find
+ * @return Child vnode or NULL if not found
+ */
+struct vnode* vfs_lookup(struct vnode *dir, const char *name);
+
+/**
+ * @brief Resolve an absolute path to a vnode (e.g. "/etc/passwd")
+ * @param path Absolute path starting with '/'
+ * @return vnode at that path or NULL
+ */
+struct vnode* vfs_resolve_path(const char *path);
+
+/**
+ * @brief Create a subdirectory inside a directory
+ * @param parent Parent directory vnode
+ * @param name Name for the new directory
+ * @return New directory vnode or NULL on error
+ */
+struct vnode* vfs_mkdir(struct vnode *parent, const char *name);
+
+/**
+ * @brief Create a regular file inside a directory
+ * @param parent Parent directory vnode
+ * @param name Name for the new file
+ * @return New file vnode or NULL on error
+ */
+struct vnode* vfs_create_file(struct vnode *parent, const char *name);
+
+/**
+ * @brief Add a child vnode to a directory under a given name
+ * @param dir Parent directory
+ * @param name Name for the entry
+ * @param child Vnode to link
+ * @return 0 on success, -1 on error
+ */
+int vfs_add_dirent(struct vnode *dir, const char *name, struct vnode *child);
