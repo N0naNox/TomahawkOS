@@ -28,7 +28,7 @@ BUILD_DIR         := ../build
 USERLAND_ROOT     := ../userland_root
 INITRD            := ${BUILD_DIR}/initrd.img
 DISK_IMG          := ${BUILD_DIR}/kernel.img
-DISK_IMG_SIZE     := 2880
+DISK_IMG_SIZE     := 33792
 
 QEMU_FLAGS :=                                                \
 	-no-reboot -no-shutdown                                    \
@@ -63,7 +63,7 @@ user: ${USER_BINARY}
 ${DISK_IMG}: ${BUILD_DIR} ${BOOTLOADER_BINARY} ${KERNEL_BINARY} ${USER_BINARY} ${INITRD}
 	# Create UEFI boot disk image in DOS format.
 	dd if=/dev/zero of=${DISK_IMG} bs=1k count=${DISK_IMG_SIZE}
-	mformat -i ${DISK_IMG} -f ${DISK_IMG_SIZE} ::
+	mformat -i ${DISK_IMG} -F ::
 	mmd -i ${DISK_IMG} ::/EFI
 	mmd -i ${DISK_IMG} ::/EFI/BOOT
 	# Copy the bootloader to the boot partition.
