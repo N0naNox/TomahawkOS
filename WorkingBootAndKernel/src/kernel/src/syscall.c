@@ -11,6 +11,7 @@
 #include "include/password_store.h"
 #include "include/demos.h"
 #include "include/tests.h"
+#include "include/shell_fs_cmd.h"
 #include "uart.h"
 
 /* External saved context from usermode demo */
@@ -290,6 +291,14 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             vga_write("\n");
             run_fork_exec_wait_demo();
             return 0;
+
+        case SYS_SHELL_CMD:
+            /* arg1 = pointer to command line string in userspace */
+            if (arg1) {
+                int ret = shell_fs_dispatch((const char *)arg1);
+                return (uint64_t)ret;
+            }
+            return (uint64_t)-1;
 
         case 99:
             /* Exit from usermode password demo - return to kernel */

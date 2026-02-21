@@ -1,0 +1,3 @@
+# /bin - Essential user command binaries
+# The build system copies user.elf here as the init/shell program.
+# exec_process("/bin/hello") and similar lookups resolve from here.

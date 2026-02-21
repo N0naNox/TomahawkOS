@@ -162,6 +162,16 @@ int fs_init_root(void);
 int fs_mount_system_dirs(void);
 
 /**
+ * @brief Populate the root filesystem with standard directories and files
+ * 
+ * Creates /bin, /sbin, /dev, /etc, /home, /tmp, /usr, /var, /proc
+ * and populates /etc with passwd, hostname, motd files.
+ * 
+ * @return 0 on success, negative on error
+ */
+int fs_populate_root(void);
+
+/**
  * @brief Print mount table (for debugging)
  */
 void mount_print_table(void);

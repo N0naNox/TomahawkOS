@@ -112,6 +112,9 @@ struct vnode* vfs_create_vnode_on_device(enum vtype type, struct block_device *d
     vp->v_type = type;
     vp->v_op = &ramfs_ops;
     vp->v_data = ip;
+    vp->v_parent = NULL;
+    vp->v_children = NULL;
+    vp->v_nchildren = 0;
     
     /* Initialize inode */
     memset(ip, 0, sizeof(struct inode));
@@ -236,6 +239,135 @@ static int ramfs_read(struct vnode *vp, void *buf, size_t nbyte) {
     
     memcpy(buf, entry->physical_addr, to_read);
     return (int)to_read;
+}
+
+/* ========== Directory & Path Operations ========== */
+
+struct vnode* vfs_lookup(struct vnode *dir, const char *name) {
+    if (!dir || !name || dir->v_type != VDIR) return NULL;
+
+    struct dir_entry *de = dir->v_children;
+    while (de) {
+        /* Compare names */
+        const char *a = de->name;
+        const char *b = name;
+        int match = 1;
+        while (*a && *b) {
+            if (*a != *b) { match = 0; break; }
+            a++; b++;
+        }
+        if (match && *a == '\0' && *b == '\0') {
+            return de->vnode;
+        }
+        de = de->next;
+    }
+    return NULL;
+}
+
+struct vnode* vfs_resolve_path(const char *path) {
+    if (!path || *path == '\0') return NULL;
+
+    struct vnode *cur = root_vnode;
+    if (!cur) return NULL;
+
+    /* "/" alone */
+    if (path[0] == '/' && path[1] == '\0') return cur;
+
+    /* Start scanning: skip leading '/' for absolute paths,
+       or start directly for relative paths (treated as relative to root) */
+    const char *p = path;
+    if (*p == '/') p++;
+    char component[VFS_NAME_MAX];
+
+    while (*p) {
+        /* Skip extra slashes */
+        while (*p == '/') p++;
+        if (*p == '\0') break;
+
+        /* Extract next path component */
+        int i = 0;
+        while (*p && *p != '/' && i < VFS_NAME_MAX - 1) {
+            component[i++] = *p++;
+        }
+        component[i] = '\0';
+
+        /* Handle "." and ".." */
+        if (component[0] == '.' && component[1] == '\0') {
+            continue; /* stay in current directory */
+        }
+        if (component[0] == '.' && component[1] == '.' && component[2] == '\0') {
+            if (cur->v_parent) cur = cur->v_parent;
+            continue;
+        }
+
+        struct vnode *child = vfs_lookup(cur, component);
+        if (!child) return NULL;
+        cur = child;
+    }
+    return cur;
+}
+
+int vfs_add_dirent(struct vnode *dir, const char *name, struct vnode *child) {
+    if (!dir || !name || !child) return -1;
+    if (dir->v_type != VDIR) return -1;
+
+    /* Check for duplicate */
+    if (vfs_lookup(dir, name) != NULL) return -1;
+
+    /* Allocate dir_entry from frame allocator */
+    struct dir_entry *de = (struct dir_entry *)pfa_alloc_frame();
+    if (!de) return -1;
+    memset(de, 0, sizeof(struct dir_entry));
+
+    /* Copy name */
+    int i = 0;
+    for (; name[i] && i < VFS_NAME_MAX - 1; i++) {
+        de->name[i] = name[i];
+    }
+    de->name[i] = '\0';
+    de->vnode = child;
+
+    /* Prepend to list */
+    de->next = dir->v_children;
+    dir->v_children = de;
+    dir->v_nchildren++;
+
+    /* Set parent */
+    child->v_parent = dir;
+
+    return 0;
+}
+
+struct vnode* vfs_mkdir(struct vnode *parent, const char *name) {
+    if (!parent || !name || parent->v_type != VDIR) return NULL;
+
+    /* Check duplicate */
+    if (vfs_lookup(parent, name) != NULL) return NULL;
+
+    struct vnode *dir = vfs_create_vnode(VDIR);
+    if (!dir) return NULL;
+
+    if (vfs_add_dirent(parent, name, dir) != 0) {
+        vfs_free_vnode(dir);
+        return NULL;
+    }
+    return dir;
+}
+
+struct vnode* vfs_create_file(struct vnode *parent, const char *name) {
+    if (!parent || !name || parent->v_type != VDIR) return NULL;
+
+    /* Check duplicate */
+    if (vfs_lookup(parent, name) != NULL) return NULL;
+
+    struct vnode *file = vfs_create_vnode(VREG);
+    if (!file) return NULL;
+
+    if (vfs_add_dirent(parent, name, file) != 0) {
+        vfs_free_vnode(file);
+        return NULL;
+    }
+    return file;
 }
 
 static int ramfs_write(struct vnode *vp, void *buf, size_t nbyte) {

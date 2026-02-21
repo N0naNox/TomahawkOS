@@ -1,0 +1,2 @@
+# /tmp - Temporary files (separate ramfs mount at runtime)
+# The kernel mounts a separate ramfs here via fs_mount_system_dirs().

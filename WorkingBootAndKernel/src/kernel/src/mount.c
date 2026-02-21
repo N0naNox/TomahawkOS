@@ -348,6 +348,112 @@ int fs_mount_system_dirs(void) {
     return 0;
 }
 
+/* Helper: create a text file and write content into it */
+static struct vnode* create_text_file(struct vnode *parent, const char *name, const char *content) {
+    struct vnode *f = vfs_create_file(parent, name);
+    if (!f) {
+        uart_puts("[FS POPULATE] WARN: Could not create ");
+        uart_puts(name);
+        uart_puts("\n");
+        return NULL;
+    }
+    if (content) {
+        size_t len = strlen(content);
+        vfs_write(f, content, len);
+    }
+    return f;
+}
+
+int fs_populate_root(void) {
+    uart_puts("[FS POPULATE] Building initial directory tree...\n");
+
+    struct vnode *root = vfs_get_root();
+    if (!root) {
+        uart_puts("[FS POPULATE] ERROR: No root vnode\n");
+        return -1;
+    }
+
+    /* ---- Top-level directories ---- */
+    struct vnode *bin   = vfs_mkdir(root, "bin");
+    struct vnode *sbin  = vfs_mkdir(root, "sbin");
+    struct vnode *dev   = vfs_mkdir(root, "dev");
+    struct vnode *etc   = vfs_mkdir(root, "etc");
+    struct vnode *home  = vfs_mkdir(root, "home");
+    struct vnode *tmp   = vfs_mkdir(root, "tmp");
+    struct vnode *usr   = vfs_mkdir(root, "usr");
+    struct vnode *var   = vfs_mkdir(root, "var");
+    struct vnode *proc  = vfs_mkdir(root, "proc");
+
+    (void)sbin; (void)dev; (void)tmp; (void)proc;
+
+    /* ---- /etc files ---- */
+    if (etc) {
+        create_text_file(etc, "passwd",
+            "admin:x:0:0:System Administrator:/home/admin:/bin/shell\n"
+            "guest:x:65534:65534:Guest Account:/tmp:/bin/shell\n");
+
+        create_text_file(etc, "shadow",
+            "admin:03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4\n"
+            "guest:*\n");
+
+        create_text_file(etc, "group",
+            "root:x:0:admin\n"
+            "users:x:100:\n"
+            "nogroup:x:65534:guest\n");
+
+        create_text_file(etc, "hostname", "tomahawk\n");
+
+        create_text_file(etc, "motd",
+            "\n"
+            "  _____                    _                 _    \n"
+            " |_   _|__  _ __ ___   __ _| |__   __ ___      _| | __\n"
+            "   | |/ _ \\| '_ ` _ \\ / _` | '_ \\ / _` \\ \\ /\\ / / |/ /\n"
+            "   | | (_) | | | | | | (_| | | | | (_| |\\ V  V /|   < \n"
+            "   |_|\\___/|_| |_| |_|\\__,_|_| |_|\\__,_| \\_/\\_/ |_|\\_\\\n"
+            "                                          OS v1.0\n"
+            "\n"
+            "Welcome to TomahawkOS! Type 'help' for available commands.\n\n");
+
+        create_text_file(etc, "fstab",
+            "# device  mountpoint  fstype  flags\n"
+            "rootfs    /           ramfs   defaults\n"
+            "none      /tmp        ramfs   noexec\n"
+            "none      /dev        ramfs   noexec\n");
+    }
+
+    /* ---- /home/admin ---- */
+    if (home) {
+        struct vnode *admin_home = vfs_mkdir(home, "admin");
+        if (admin_home) {
+            create_text_file(admin_home, "welcome.txt",
+                "Welcome to TomahawkOS, admin!\n"
+                "This is your home directory.\n");
+        }
+    }
+
+    /* ---- /usr sub-tree ---- */
+    if (usr) {
+        vfs_mkdir(usr, "bin");
+        vfs_mkdir(usr, "lib");
+        vfs_mkdir(usr, "include");
+    }
+
+    /* ---- /var sub-tree ---- */
+    if (var) {
+        vfs_mkdir(var, "log");
+        vfs_mkdir(var, "run");
+    }
+
+    /* ---- /bin initial files ---- */
+    if (bin) {
+        create_text_file(bin, "hello",
+            "#!/bin/shell\necho Hello from TomahawkOS!\n");
+    }
+
+    uart_puts("[FS POPULATE] Directory tree created successfully\n");
+    return 0;
+}
+
 void mount_print_table(void) {
     uart_puts("\n=== Mount Table ===\n");
     uart_puts("Path            Filesystem  Device\n");
