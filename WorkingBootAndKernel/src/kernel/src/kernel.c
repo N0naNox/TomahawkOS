@@ -31,6 +31,7 @@
 #include "include/demos.h"
 #include "include/password_store.h"
 #include "include/mount.h"
+#include "include/init_config.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -211,6 +212,19 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 
 	/* Populate root filesystem with standard directories and files */
 	fs_populate_root();
+
+	/* Register the initrd memory region so init_config_load() can find
+	 * /etc/init.conf directly in the cpio archive without going through VFS. */
+	if (boot_info->initrd_base != 0 && boot_info->initrd_size > 0) {
+		init_config_set_initrd((void *)boot_info->initrd_base,
+		                        boot_info->initrd_size);
+	}
+
+	/* Load and parse /etc/init.conf from initrd (or VFS fallback) */
+	if (init_config_load() != 0) {
+		const char *cfg_err = "WARNING: Failed to load /etc/init.conf\n";
+		for (int i = 0; cfg_err[i]; i++) outb(0x3F8, cfg_err[i]);
+	}
 
 	/* Print mount table for debugging */
 	mount_print_table();

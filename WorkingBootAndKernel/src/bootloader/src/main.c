@@ -75,6 +75,13 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 	Kernel_Boot_Info boot_info;
 	/** Input key type used to capture user input. */
 	EFI_INPUT_KEY input_key;
+	/** Initrd (initial RAM disk) loading state. */
+	EFI_FILE* initrd_file = NULL;
+	EFI_FILE_INFO* initrd_info = NULL;
+	UINTN initrd_info_size = 0;
+	EFI_PHYSICAL_ADDRESS initrd_phys = 0;
+	UINTN initrd_read_size = 0;
+	UINTN initrd_pages = 0;
 
 	// Initialise service protocols to NULL, so that we can detect if they are
 	// properly initialised in service functions.
@@ -199,6 +206,46 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 		debug_print_line(L"Debug: Closing Graphics Output Service handles\n");
 	#endif
 
+
+	/* ---- Load initrd.img into memory ---- */
+	boot_info.initrd_base = 0;
+	boot_info.initrd_size = 0;
+
+	status = uefi_call_wrapper(root_file_system->Open, 5,
+		root_file_system, &initrd_file, INITRD_PATH,
+		EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY);
+	if (!EFI_ERROR(status) && initrd_file != NULL) {
+		/* Get file size via GetInfo */
+		initrd_info_size = sizeof(EFI_FILE_INFO) + 256;
+		status = uefi_call_wrapper(gBS->AllocatePool, 3,
+			EfiLoaderData, initrd_info_size, (VOID**)&initrd_info);
+		if (!EFI_ERROR(status)) {
+			status = uefi_call_wrapper(initrd_file->GetInfo, 4,
+				initrd_file, &gEfiFileInfoGuid,
+				&initrd_info_size, (VOID*)initrd_info);
+			if (!EFI_ERROR(status)) {
+				initrd_read_size = (UINTN)initrd_info->FileSize;
+				initrd_pages     = EFI_SIZE_TO_PAGES(initrd_read_size);
+				status = uefi_call_wrapper(gBS->AllocatePages, 4,
+					AllocateAnyPages, EfiLoaderData,
+					initrd_pages, &initrd_phys);
+				if (!EFI_ERROR(status)) {
+					status = uefi_call_wrapper(initrd_file->Read, 3,
+						initrd_file, &initrd_read_size, (VOID*)initrd_phys);
+					if (!EFI_ERROR(status)) {
+						boot_info.initrd_base = initrd_phys;
+						boot_info.initrd_size = (UINTN)initrd_info->FileSize;
+					} else {
+						/* Read failed — free pages and leave fields 0 */
+						uefi_call_wrapper(gBS->FreePages, 2, initrd_phys, initrd_pages);
+					}
+				}
+			}
+			uefi_call_wrapper(gBS->FreePool, 1, initrd_info);
+		}
+		uefi_call_wrapper(initrd_file->Close, 1, initrd_file);
+	}
+	/* (If initrd is absent or load failed, boot_info.initrd_base/size remain 0) */
 
 	#ifdef DEBUG
 		debug_print_line(L"Debug: Getting memory map and exiting boot services\n");

@@ -419,6 +419,11 @@ int fs_populate_root(void) {
             "rootfs    /           ramfs   defaults\n"
             "none      /tmp        ramfs   noexec\n"
             "none      /dev        ramfs   noexec\n");
+
+        /* NOTE: init.conf is NOT created here.
+         * It is read directly from the initrd (cpio newc archive) that the
+         * bootloader loads into memory.  init_config_load() scans the initrd
+         * at boot time — no VFS file needed. */
     }
 
     /* ---- /home/admin ---- */

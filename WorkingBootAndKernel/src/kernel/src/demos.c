@@ -886,6 +886,7 @@ void run_tomahawk_shell(void) {
         "  tree [p]  - Show directory tree\n"
         "  stat <p>  - Show file/dir info\n"
         "  pwd       - Print working directory\n"
+        "  initconf  - Show loaded init configuration\n"
         "  vfs       - Run VFS filesystem demo\n"
         "  tests     - Run kernel unit tests\n"
         "  forkwait  - Run fork-exec-wait demo\n"
