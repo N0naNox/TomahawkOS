@@ -324,6 +324,56 @@ int init_config_is_loaded(void) {
     return cfg_loaded;
 }
 
+int init_config_create_vfs_copy(void) {
+    if (!cfg_loaded || cfg_count == 0) {
+        uart_puts("[INITCFG] Nothing to copy to VFS (not loaded or empty)\n");
+        return -1;
+    }
+
+    /* Resolve /etc */
+    struct vnode *etc = vfs_resolve_path("/etc");
+    if (!etc) {
+        uart_puts("[INITCFG] /etc not found in VFS\n");
+        return -1;
+    }
+
+    /* If the file already exists, skip */
+    if (vfs_lookup(etc, "init.conf") != NULL) {
+        uart_puts("[INITCFG] /etc/init.conf already exists in VFS\n");
+        return 0;
+    }
+
+    /* Reconstruct file content from parsed entries */
+    char buf[2048];
+    int off = 0;
+
+    /* Header comment */
+    const char *hdr = "# TomahawkOS Init Configuration\n";
+    for (int i = 0; hdr[i] && off < (int)sizeof(buf) - 1; i++)
+        buf[off++] = hdr[i];
+
+    for (int i = 0; i < cfg_count && off < (int)sizeof(buf) - 4; i++) {
+        /* key=value\n */
+        for (const char *s = cfg_table[i].key; *s && off < (int)sizeof(buf) - 3; s++)
+            buf[off++] = *s;
+        buf[off++] = '=';
+        for (const char *s = cfg_table[i].val; *s && off < (int)sizeof(buf) - 2; s++)
+            buf[off++] = *s;
+        buf[off++] = '\n';
+    }
+    buf[off] = '\0';
+
+    /* Create the file */
+    struct vnode *f = vfs_create_file(etc, "init.conf");
+    if (!f) {
+        uart_puts("[INITCFG] Failed to create /etc/init.conf in VFS\n");
+        return -1;
+    }
+    vfs_write(f, buf, (size_t)off);
+    uart_puts("[INITCFG] Created /etc/init.conf in VFS (visible to ls/cat)\n");
+    return 0;
+}
+
 void init_config_dump(void) {
     if (!cfg_loaded) {
         vga_write("[initconf] Init configuration has NOT been loaded yet.\n");

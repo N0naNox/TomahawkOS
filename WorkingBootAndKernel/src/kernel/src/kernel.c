@@ -226,6 +226,9 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 		for (int i = 0; cfg_err[i]; i++) outb(0x3F8, cfg_err[i]);
 	}
 
+	/* Copy parsed init.conf into VFS so ls/cat can see it */
+	init_config_create_vfs_copy();
+
 	/* Print mount table for debugging */
 	mount_print_table();
 

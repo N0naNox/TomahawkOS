@@ -71,27 +71,12 @@ int init_config_is_loaded(void);
  */
 void init_config_dump(void);
 
-
 /**
- * @brief Look up a config value by key.
+ * @brief Create /etc/init.conf in the VFS from the parsed configuration.
  *
- * @param key  Null-terminated key string.
- * @return Pointer to the value string, or NULL if not found.
- *         The pointer is valid as long as the module state is live.
- */
-const char *init_config_get(const char *key);
-
-/**
- * @brief Check whether init config was successfully loaded.
+ * Call after init_config_load() so that `ls /etc` and `cat /etc/init.conf`
+ * can see the file.  The file is reconstructed from the in-memory table.
  *
- * @return 1 if loaded, 0 if not yet loaded or load failed.
+ * @return 0 on success, -1 on error.
  */
-int init_config_is_loaded(void);
-
-/**
- * @brief Dump all parsed key=value pairs via vga_write.
- *
- * Intended for the 'initconf' shell command so the user can
- * verify that the file was loaded and parsed correctly.
- */
-void init_config_dump(void);
+int init_config_create_vfs_copy(void);

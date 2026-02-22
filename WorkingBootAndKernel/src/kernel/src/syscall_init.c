@@ -43,7 +43,7 @@ void syscall_init() {
     __asm__ volatile("wrmsr" : : "a"(0x200), "d"(0), "c"(MSR_SFMASK)); 
 
 
-    static uint8_t sys_stack[8192];
+    static uint8_t sys_stack[16384];   /* 16 KB – 8 KB was too tight for VFS/shell syscalls */
     cpu_info.kernel_stack = (uintptr_t)sys_stack + sizeof(sys_stack);
 
     uint64_t gs_base = (uintptr_t)&cpu_info;
