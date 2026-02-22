@@ -39,6 +39,10 @@ typedef struct s_boot_info {
 	uint64_t memory_map_size;
 	uint64_t memory_map_descriptor_size;
 	Kernel_Boot_Video_Mode_Info video_mode_info;
+	/** Physical address of the loaded initrd.img cpio archive (0 if absent). */
+	uintptr_t initrd_base;
+	/** Size in bytes of the loaded initrd (0 if absent). */
+	uint64_t initrd_size;
 } Boot_Info;
 
 #endif

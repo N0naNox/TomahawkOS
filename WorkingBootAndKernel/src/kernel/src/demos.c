@@ -17,6 +17,7 @@
 #include "include/hal_port_io.h"
 #include <uart.h>
 #include "include/vga.h"
+#include "include/init_config.h"
 
 extern volatile int demo_stop_requested;
 extern void demo_esc_watcher(void);
@@ -886,12 +887,40 @@ void run_tomahawk_shell(void) {
         "  tree [p]  - Show directory tree\n"
         "  stat <p>  - Show file/dir info\n"
         "  pwd       - Print working directory\n"
+        "  initconf  - Show loaded init configuration\n"
         "  vfs       - Run VFS filesystem demo\n"
         "  tests     - Run kernel unit tests\n"
         "  forkwait  - Run fork-exec-wait demo\n"
         "  exit      - Exit shell and return to kernel\n\n")
-    PLACE_STR(s_prompt_guest, "guest@tomahawk> ")
-    PLACE_STR(s_prompt_at, "@tomahawk> ")
+    /* Build prompts dynamically from init.conf (hostname= and username=) */
+    const char *_cfg_host = init_config_get("hostname");
+    const char *_cfg_user = init_config_get("username");
+    if (!_cfg_host || !_cfg_host[0]) _cfg_host = "tomahawk";
+    if (!_cfg_user || !_cfg_user[0]) _cfg_user = "guest";
+
+    /* Guest/default prompt: "<username>@<hostname>> " */
+    char _guest_prompt[64];
+    {
+        char *_q = _guest_prompt;
+        for (const char *_c = _cfg_user; *_c; _c++) *_q++ = *_c;
+        *_q++ = '@';
+        for (const char *_c = _cfg_host; *_c; _c++) *_q++ = *_c;
+        *_q++ = '>'; *_q++ = ' '; *_q = '\0';
+    }
+    /* Logged-in suffix: "@<hostname>> " */
+    char _at_prompt[64];
+    {
+        char *_q = _at_prompt;
+        *_q++ = '@';
+        for (const char *_c = _cfg_host; *_c; _c++) *_q++ = *_c;
+        *_q++ = '>'; *_q++ = ' '; *_q = '\0';
+    }
+
+    uint64_t s_prompt_guest = SHELL_DATA + off; size_t s_prompt_guest_len = 0;
+    { const char *_s = _guest_prompt; while (*_s) { data_ptr[off++] = (uint8_t)*_s++; s_prompt_guest_len++; } data_ptr[off++] = 0; }
+    uint64_t s_prompt_at = SHELL_DATA + off; size_t s_prompt_at_len = 0;
+    { const char *_s = _at_prompt; while (*_s) { data_ptr[off++] = (uint8_t)*_s++; s_prompt_at_len++; } data_ptr[off++] = 0; }
+
     PLACE_STR(s_user, "Username: ")
     PLACE_STR(s_pass, "Password: ")
     PLACE_STR(s_login_ok, "\n[OK] Login successful! Welcome, ")

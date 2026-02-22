@@ -40,9 +40,11 @@ QEMU_FLAGS :=                                                \
 	-net none                                                  \
 	-vga std
 
-.PHONY: all clean emu
+.PHONY: all clean emu initrd
 
 all: ${DISK_IMG}
+
+initrd: ${INITRD}
 
 bootloader: ${BOOTLOADER_BINARY}
 

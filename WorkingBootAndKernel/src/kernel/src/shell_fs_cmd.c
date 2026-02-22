@@ -13,6 +13,7 @@
 #include "include/string.h"
 #include "include/vga.h"
 #include "include/shell_fs_cmd.h"
+#include "include/init_config.h"
 #include <uart.h>
 #include <stddef.h>
 
@@ -398,6 +399,23 @@ static void cmd_stat(const char *args) {
     }
 }
 
+/* ========== initconf ========== */
+
+static void cmd_initconf(const char *args) {
+    (void)args;
+
+    if (!init_config_is_loaded()) {
+        /* Attempt a (re-)load so the user gets useful feedback */
+        vga_write("[initconf] Config not loaded yet - attempting load...\n");
+        if (init_config_load() != 0) {
+            vga_write("[initconf] ERROR: Failed to load " INIT_CFG_PATH "\n");
+            return;
+        }
+    }
+
+    init_config_dump();
+}
+
 /* ========== Main dispatcher ========== */
 
 /**
@@ -444,6 +462,10 @@ int shell_fs_dispatch(const char *cmdline) {
     }
     if (strcmp(cmd, "stat") == 0) {
         cmd_stat(args);
+        return 0;
+    }
+    if (strcmp(cmd, "initconf") == 0) {
+        cmd_initconf(args);
         return 0;
     }
 

@@ -419,6 +419,10 @@ int fs_populate_root(void) {
             "rootfs    /           ramfs   defaults\n"
             "none      /tmp        ramfs   noexec\n"
             "none      /dev        ramfs   noexec\n");
+
+        /* init.conf is created separately by init_config_create_vfs_copy()
+         * after init_config_load() parses the initrd, so it shows up in
+         * ls /etc and is accessible via cat /etc/init.conf. */
     }
 
     /* ---- /home/admin ---- */

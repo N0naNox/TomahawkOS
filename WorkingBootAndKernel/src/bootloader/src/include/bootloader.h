@@ -18,6 +18,9 @@
 /** The path to the kernel executable binary on the bootable media. */
 #define KERNEL_EXECUTABLE_PATH L"\\kernel.elf"
 
+/** The path to the initial RAM disk (cpio newc archive) on the bootable media. */
+#define INITRD_PATH            L"\\initrd.img"
+
 /**
  * Whether to prompt, and wait for user input before rebooting in the case
  * of an unrecoverable error.
@@ -45,6 +48,10 @@ typedef struct s_boot_info {
 	UINTN memory_map_size;
 	UINTN memory_map_descriptor_size;
 	Kernel_Boot_Video_Mode_Info video_mode_info;
+	/** Base address of the initrd image loaded into memory (0 if not loaded). */
+	EFI_PHYSICAL_ADDRESS initrd_base;
+	/** Size in bytes of the initrd image (0 if not loaded). */
+	UINTN initrd_size;
 } Kernel_Boot_Info;
 
 /**
