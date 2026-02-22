@@ -25,4 +25,8 @@ tcb_t* scheduler_current(void);
 /* Called when a thread exits to pick next thread (not implemented here) */
 void scheduler_thread_exit(void);
 
+/* Block the current thread and switch to the next ready thread.
+ * The caller must have already set current->state = THREAD_BLOCKED. */
+void scheduler_block_current(void);
+
 #endif /* SCHEDULER_H */
