@@ -96,6 +96,11 @@ pcb_t* create_process(const char* name, void (*entry)(void)) {
     p->parent = NULL;
     p->exit_code = 0;
 
+    /* Job control: new process is its own group leader by default */
+    p->pgid = p->pid;
+    p->sid  = p->pid;
+    p->is_stopped = 0;
+
     /* Main thread */
     p->main_thread = create_thread(p, entry);
     p->threads = p->main_thread;
@@ -137,7 +142,12 @@ int fork_process(void) {
     child->pid = next_pid++;
     child->parent = parent;
     child->exit_code = 0;
-    
+
+    /* Inherit process group and session from parent */
+    child->pgid = parent->pgid;
+    child->sid  = parent->sid;
+    child->is_stopped = 0;
+
     /* Copy signal handlers (but not pending signals) */
     memcpy(&child->signals, &parent->signals, sizeof(signal_struct_t));
     child->signals.pending = 0;  /* Child starts with no pending signals */
@@ -347,6 +357,119 @@ void process_reparent_children(pcb_t* dying) {
         child = next_sib;
     }
     dying->children = NULL;
+}
+
+/* ================================================================
+ *  Job control helpers
+ * ================================================================ */
+
+/* Simple foreground-group table: maps session ID -> foreground pgid.
+ * With a single terminal this typically has one entry, but we
+ * support up to 8 concurrent sessions.                              */
+#define MAX_SESSIONS 8
+static struct {
+    uint64_t sid;
+    uint64_t fg_pgid;
+} fg_table[MAX_SESSIONS];
+
+void session_set_foreground(uint64_t sid, uint64_t pgid) {
+    /* Try to find existing entry */
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (fg_table[i].sid == sid) {
+            fg_table[i].fg_pgid = pgid;
+            uart_puts("[JOB] Session ");
+            uart_putu(sid);
+            uart_puts(" fg group -> ");
+            uart_putu(pgid);
+            uart_puts("\n");
+            return;
+        }
+    }
+    /* Allocate free slot (sid == 0 means unused) */
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (fg_table[i].sid == 0) {
+            fg_table[i].sid = sid;
+            fg_table[i].fg_pgid = pgid;
+            uart_puts("[JOB] New session ");
+            uart_putu(sid);
+            uart_puts(" fg group -> ");
+            uart_putu(pgid);
+            uart_puts("\n");
+            return;
+        }
+    }
+    uart_puts("[JOB] WARNING: no free session slot\n");
+}
+
+uint64_t session_get_foreground(uint64_t sid) {
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (fg_table[i].sid == sid) {
+            return fg_table[i].fg_pgid;
+        }
+    }
+    return 0;
+}
+
+int setpgid(pcb_t* proc, uint64_t pgid) {
+    if (!proc) return -1;
+    if (pgid == 0) pgid = proc->pid;
+    proc->pgid = pgid;
+    uart_puts("[JOB] PID ");
+    uart_putu(proc->pid);
+    uart_puts(" pgid -> ");
+    uart_putu(pgid);
+    uart_puts("\n");
+    return 0;
+}
+
+int setsid(pcb_t* proc) {
+    if (!proc) return -1;
+    /* Process becomes session leader: sid = pgid = pid */
+    proc->sid  = proc->pid;
+    proc->pgid = proc->pid;
+    /* Also register this session with the process as the initial fg group */
+    session_set_foreground(proc->sid, proc->pgid);
+    uart_puts("[JOB] PID ");
+    uart_putu(proc->pid);
+    uart_puts(" created new session ");
+    uart_putu(proc->sid);
+    uart_puts("\n");
+    return 0;
+}
+
+/* Send signal to every process in a process group */
+int signal_process_group(uint64_t pgid, int signo) {
+    int count = 0;
+    pcb_t* p = process_list;
+    while (p) {
+        if (p->pgid == pgid && p->pid != 0 && !p->is_zombie) {
+            signal_send(p, signo);
+            count++;
+        }
+        p = p->next;
+    }
+    uart_puts("[JOB] Sent signal ");
+    uart_putu(signo);
+    uart_puts(" to ");
+    uart_putu(count);
+    uart_puts(" process(es) in pgid ");
+    uart_putu(pgid);
+    uart_puts("\n");
+    return count;
+}
+
+/* Resume a stopped process */
+void process_continue(pcb_t* proc) {
+    if (!proc || !proc->is_stopped) return;
+    proc->is_stopped = 0;
+    uart_puts("[JOB] Continuing PID ");
+    uart_putu(proc->pid);
+    uart_puts("\n");
+    /* Re-add main thread to scheduler ready queue so it can run again */
+    if (proc->main_thread && proc->main_thread->state == THREAD_BLOCKED) {
+        proc->main_thread->state = THREAD_READY;
+        scheduler_add_thread(proc->main_thread);
+    }
 }
 
 /* Wait for specific child process or any child */

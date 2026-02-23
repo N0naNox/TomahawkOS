@@ -9,12 +9,17 @@
 #include "include/hal_port_io.h"
 #include "include/idt.h"
 #include "include/vga.h"
+#include "include/proc.h"
+#include "include/signal.h"
 #include <uart.h>
 
 /* Simple ring buffer */
 static volatile char kb_buf[128];
 static volatile int kb_head = 0;
 static volatile int kb_tail = 0;
+
+/* Modifier state tracked across IRQs */
+static volatile int ctrl_held = 0;
 
 /* Basic scancode set 1 to ASCII map (0..0x7F). 0 means unmapped */
 static const char scancode_map[128] = {
@@ -59,9 +64,37 @@ static void keyboard_irq_handler(regs_t* r) {
         return;
     }
 
-    /* Ignore break codes (high bit set) */
+    /* Track Ctrl key state (0x1D = press, 0x9D = release) */
+    if (sc == 0x1D) { ctrl_held = 1; return; }
+    if (sc == 0x9D) { ctrl_held = 0; return; }
+
+    /* Ignore other break codes (high bit set) */
     if (sc & 0x80) {
         return;
+    }
+
+    /* --- Job control shortcuts --- */
+    if (ctrl_held) {
+        pcb_t* cur = get_current_process();
+        uint64_t fg_pgid = 0;
+        if (cur) fg_pgid = session_get_foreground(cur->sid);
+
+        if (sc == 0x2E && fg_pgid) {
+            /* Ctrl+C -> SIGINT to foreground group */
+            uart_puts("[KB] Ctrl+C -> SIGINT to pgid ");
+            uart_putu(fg_pgid);
+            uart_puts("\n");
+            signal_process_group(fg_pgid, SIGINT);
+            return;
+        }
+        if (sc == 0x2C && fg_pgid) {
+            /* Ctrl+Z -> SIGTSTP to foreground group */
+            uart_puts("[KB] Ctrl+Z -> SIGTSTP to pgid ");
+            uart_putu(fg_pgid);
+            uart_puts("\n");
+            signal_process_group(fg_pgid, SIGTSTP);
+            return;
+        }
     }
 
     char c = 0;

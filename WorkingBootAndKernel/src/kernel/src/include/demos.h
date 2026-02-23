@@ -33,4 +33,7 @@ void run_tomahawk_shell(void);
 /* Run scheduler demo - shows multi-threaded scheduling */
 void run_scheduler_demo(void);
 
+/* Run job control demo - foreground/background groups, Ctrl+C/Z */
+void run_job_control_demo(void);
+
 #endif /* DEMOS_H */
