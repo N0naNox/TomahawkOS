@@ -7,6 +7,9 @@
 
 #define MAX_FILES 32   
 
+/* waitpid option flags */
+#define WNOHANG 1   /* Return immediately if no zombie child */
+
 /* Thread states */
 typedef enum {
     THREAD_READY,
@@ -90,5 +93,11 @@ pcb_t* find_process_by_pid(uint64_t pid);
 
 /* allocate kernel stack */
 void* alloc_kernel_stack(void);
+
+/* Reap a zombie child: free its resources and remove from process list */
+void process_reap(pcb_t* child);
+
+/* Reparent all children of 'dying' to init (PID 1) or discard zombies */
+void process_reparent_children(pcb_t* dying);
 
 #endif /* PROC_H */

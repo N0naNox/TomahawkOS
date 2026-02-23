@@ -12,7 +12,7 @@
 
 /* VGA text dimensions */
 #define VGA_WIDTH 80
-#define VGA_HEIGHT 25
+#define VGA_HEIGHT 48   /* 768 pixels / 16 pixels per row = 48 rows */
 
 /* VGA color constants */
 enum vga_color {

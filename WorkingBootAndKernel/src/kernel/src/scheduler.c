@@ -168,6 +168,9 @@ void scheduler_thread_exit(void) {
             pcb_t* proc = current->parent;
             if (proc->main_thread == current) {
                 proc->is_zombie = 1;
+
+                /* Reparent children of the dying process to init / discard */
+                process_reparent_children(proc);
                 
                 /* Wake up waiting parent if any */
                 if (proc->parent && proc->parent->wait_queue) {
@@ -198,4 +201,22 @@ void scheduler_thread_exit(void) {
     } else {
         context_switch(&kernel_context, &next->context);
     }
+}
+
+void scheduler_block_current(void) {
+    if (!current) return;
+
+    /* Caller must have already set current->state = THREAD_BLOCKED */
+    tcb_t* next = dequeue_next();
+    if (!next) {
+        /* Deadlock: nobody to run.  Just spin-wait for an IRQ to enqueue something. */
+        current->state = THREAD_RUNNING;
+        return;
+    }
+
+    next->state = THREAD_RUNNING;
+    tcb_t* old = current;
+    current = next;
+    context_switch(&old->context, &next->context);
+    /* When we return here, the parent was woken up again */
 }

@@ -271,6 +271,84 @@ int wait_process(int* status) {
     return waitpid_process(-1, status, 0);
 }
 
+/* ---- Internal: remove a PCB from the global process_list ---- */
+static void process_list_remove(pcb_t* target) {
+    pcb_t** pp = &process_list;
+    while (*pp) {
+        if (*pp == target) {
+            *pp = target->next;
+            target->next = NULL;
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+/* Reap a zombie child: free its resources and remove from process list */
+void process_reap(pcb_t* child) {
+    if (!child) return;
+
+    uart_puts("[REAP] Freeing resources for PID ");
+    uart_putu(child->pid);
+    uart_puts("\n");
+
+    /* Free the address-space descriptor (mm_destroy is a no-op for pages
+     * in your bump allocator, but it marks the intent and will work once
+     * a real allocator is wired up). */
+    if (child->mm) {
+        mm_destroy(child->mm);
+        child->mm = NULL;
+    }
+
+    /* Remove from global process list so find_process_by_pid won't
+     * return a stale pointer. */
+    process_list_remove(child);
+
+    /* The PCB itself was bump-allocated (zalloc) and cannot be freed
+     * with the current allocator.  Zero it out so stale pointers are
+     * less dangerous. */
+    child->pid = 0;
+    child->is_zombie = 0;
+}
+
+/* Reparent all children of a dying process.
+ * Zombie children are reaped immediately (no parent will ever wait for
+ * them).  Living children are reparented to PID 1 (init) if it exists,
+ * otherwise they become root-less (parent == NULL). */
+void process_reparent_children(pcb_t* dying) {
+    if (!dying || !dying->children) return;
+
+    pcb_t* init_proc = find_process_by_pid(1);  /* May be NULL */
+
+    pcb_t* child = dying->children;
+    while (child) {
+        pcb_t* next_sib = child->sibling_next;
+
+        if (child->is_zombie) {
+            /* Nobody will ever wait() for it — reap now */
+            uart_puts("[REPARENT] Reaping orphaned zombie PID ");
+            uart_putu(child->pid);
+            uart_puts("\n");
+            process_reap(child);
+        } else if (init_proc && init_proc != dying) {
+            /* Reparent to init */
+            child->parent = init_proc;
+            child->sibling_next = init_proc->children;
+            init_proc->children = child;
+            uart_puts("[REPARENT] PID ");
+            uart_putu(child->pid);
+            uart_puts(" -> init (PID 1)\n");
+        } else {
+            /* No init — just detach */
+            child->parent = NULL;
+            child->sibling_next = NULL;
+        }
+
+        child = next_sib;
+    }
+    dying->children = NULL;
+}
+
 /* Wait for specific child process or any child */
 int waitpid_process(int pid, int* status, int options) {
     pcb_t* parent = get_current_process();
@@ -288,11 +366,12 @@ int waitpid_process(int pid, int* status, int options) {
         uart_putu(pid);
         uart_puts("\n");
     }
-    
-    /* Check if there are any children */
+
+retry:
+    /* Check if there are any children at all */
     if (!parent->children) {
         uart_puts("wait: no children\n");
-        return -1;  /* ECHILD - no children */
+        return -1;  /* ECHILD */
     }
     
     /* Look for a zombie child matching the criteria */
@@ -300,7 +379,6 @@ int waitpid_process(int pid, int* status, int options) {
     pcb_t* child = parent->children;
     
     while (child) {
-        /* Check if this child matches */
         int matches = (pid == -1) || (child->pid == (uint64_t)pid);
         
         if (matches && child->is_zombie) {
@@ -310,7 +388,6 @@ int waitpid_process(int pid, int* status, int options) {
             uart_putu(child->exit_code);
             uart_puts("\n");
             
-            /* Store exit status */
             if (status) {
                 *status = child->exit_code;
             }
@@ -324,8 +401,8 @@ int waitpid_process(int pid, int* status, int options) {
                 parent->children = child->sibling_next;
             }
             
-            /* TODO: Free child's resources (mm, threads, etc.) */
-            /* For now, we just mark it as reaped */
+            /* Free the child's resources */
+            process_reap(child);
             
             return (int)child_pid;
         }
@@ -334,17 +411,30 @@ int waitpid_process(int pid, int* status, int options) {
         child = child->sibling_next;
     }
     
-    /* No zombie child found */
-    (void)options;  /* TODO: handle WNOHANG option */
-    
-    /* In a real implementation, we would block the parent thread here
-     * and wake it up when a child exits. For simplicity, we return -1. */
-    uart_puts("wait: no zombie children (blocking not implemented)\n");
-    
-    /* Store current thread in wait queue (for future implementation) */
-    parent->wait_queue = scheduler_current();
-    
-    /* TODO: Block current thread and yield to scheduler */
-    /* For now, just return error */
-    return -1;  /* EAGAIN or would block */
+    /* No zombie child found yet */
+    if (options & WNOHANG) {
+        uart_puts("wait: WNOHANG — no zombie children, returning 0\n");
+        return 0;  /* POSIX: 0 means "children exist but none exited yet" */
+    }
+
+    /* ---------- Blocking wait ---------- */
+    uart_puts("wait: blocking PID ");
+    uart_putu(parent->pid);
+    uart_puts(" until a child exits\n");
+
+    /* Record which thread to wake up */
+    tcb_t* me = scheduler_current();
+    parent->wait_queue = me;
+    me->state = THREAD_BLOCKED;
+
+    /* Yield CPU — we won't run again until scheduler_thread_exit()
+     * (in the child) calls scheduler_add_thread() on us. */
+    scheduler_block_current();
+
+    /* We've been woken up — a child must have become a zombie.
+     * Go back and scan again. */
+    uart_puts("wait: PID ");
+    uart_putu(parent->pid);
+    uart_puts(" woke up, re-scanning children\n");
+    goto retry;
 }

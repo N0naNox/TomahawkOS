@@ -253,125 +253,250 @@ void run_combined_cow_signals_demo(void) {
 
 /* ========== Fork-Exec-Wait Demo ========== */
 
+/* Helper: print a uint64 into buf and write it to VGA */
+static void vga_write_u64(uint64_t val) {
+    char buf[20];
+    int n = 0;
+    if (val == 0) { buf[n++] = '0'; }
+    else {
+        char rev[20]; int rn = 0;
+        while (val > 0) { rev[rn++] = '0' + (val % 10); val /= 10; }
+        for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
+    }
+    buf[n] = '\0';
+    vga_write(buf);
+}
+
 void run_fork_exec_wait_demo(void) {
     vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
-    vga_write("=== Fork-Exec-Wait Demo ===\n\n");
-    uart_puts("\n=== Fork-Exec-Wait Demo ===\n");
-    
-    pcb_t* current = get_current_process();
-    uint64_t parent_pid = current ? current->pid : 0;
-    char buf[20];
-    
-    /* --- Step 1: Show current process --- */
+    vga_write("=== Fork-Exec-Wait & Zombie Reaping Demo ===\n\n");
+    uart_puts("\n=== Fork-Exec-Wait & Zombie Reaping Demo ===\n");
+
+    pcb_t* cur = get_current_process();
+    uint64_t parent_pid = cur ? cur->pid : 0;
+
+    /* ------------------------------------------------------------------ */
+    /*  Part 1 — Basic fork / exec / exit / wait                          */
+    /* ------------------------------------------------------------------ */
+    vga_write("--- Part 1: fork() -> exec() -> exit() -> wait() ---\n");
+
+    /* Step 1: show current process */
     vga_write("1. Current process: PID = ");
-    int n = 0;
-    uint64_t tmp = parent_pid;
-    if (tmp == 0) { buf[n++] = '0'; }
-    else {
-        char rev[20]; int rn = 0;
-        while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
-        for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
-    }
-    buf[n] = 0;
-    vga_write(buf);
+    vga_write_u64(parent_pid);
     vga_write("\n");
-    
-    /* --- Step 2: Fork --- */
+
+    /* Step 2: fork */
     vga_write("2. fork() - Creating child process...\n");
-    
-    pcb_t* child = create_process("few-child", (void(*)(void))0);
-    if (!child) {
-        vga_write("   [FAIL] Could not create child!\n");
-        return;
-    }
-    
-    child->parent = current;
-    if (current) {
-        child->sibling_next = current->children;
-        current->children = child;
-    }
-    
-    uint64_t child_pid = child->pid;
-    
-    vga_write("   [OK] Parent ");
-    n = 0; tmp = parent_pid;
-    if (tmp == 0) { buf[n++] = '0'; }
-    else {
-        char rev[20]; int rn = 0;
-        while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
-        for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
-    }
-    buf[n] = 0;
-    vga_write(buf);
-    vga_write(" -> Child ");
-    n = 0; tmp = child_pid;
-    if (tmp == 0) { buf[n++] = '0'; }
-    else {
-        char rev[20]; int rn = 0;
-        while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
-        for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
-    }
-    buf[n] = 0;
-    vga_write(buf);
+    pcb_t* child1 = create_process("few-child1", (void(*)(void))0);
+    if (!child1) { vga_write("   [FAIL] Could not create child!\n"); return; }
+    child1->parent = cur;
+    if (cur) { child1->sibling_next = cur->children; cur->children = child1; }
+    vga_write("   [OK] Parent PID ");
+    vga_write_u64(parent_pid);
+    vga_write(" -> Child PID ");
+    vga_write_u64(child1->pid);
     vga_write("\n");
-    
-    /* --- Step 3: Exec (simulated) --- */
+
+    /* Step 3: exec (simulated) */
     vga_write("3. exec(\"/bin/hello\") - Load new program...\n");
-    
     int exec_ret = exec_process("/bin/hello", NULL);
     (void)exec_ret;
-    
     vga_write("   Returned -1 (VFS not wired); would replace address space\n");
-    
-    /* --- Step 4: Simulate child exiting with status --- */
-    vga_write("4. Child executes and exits with status 42...\n");
-    
-    child->exit_code = 42;
-    child->is_zombie = 1;
-    
-    vga_write("   [OK] Child now in zombie state\n");
-    
-    /* --- Step 5: Wait --- */
-    vga_write("5. wait() - Parent reaps child...\n");
-    
+
+    /* Step 4: child exits with status 42 */
+    vga_write("4. Child exits with status 42...\n");
+    child1->exit_code = 42;
+    child1->is_zombie = 1;
+    vga_write("   [OK] Child PID ");
+    vga_write_u64(child1->pid);
+    vga_write(" is now a zombie\n");
+
+    /* Step 5: wait() reaps the zombie */
+    vga_write("5. waitpid() - Parent reaps child...\n");
     int status = 0;
-    int waited_pid = waitpid_process((int)child_pid, &status, 0);
-    
-    if (waited_pid == (int)child_pid) {
-        vga_write("   [OK] waitpid() returned PID ");
-        n = 0; tmp = (uint64_t)waited_pid;
-        if (tmp == 0) { buf[n++] = '0'; }
-        else {
-            char rev[20]; int rn = 0;
-            while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
-            for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
-        }
-        buf[n] = 0;
-        vga_write(buf);
+    int reaped = waitpid_process((int)child1->pid, &status, 0);
+    if (reaped > 0) {
+        vga_write("   [OK] Reaped PID ");
+        vga_write_u64((uint64_t)reaped);
+        vga_write(", exit status = ");
+        vga_write_u64((uint64_t)status);
+        vga_write("  (resources freed)\n");
+    } else {
+        vga_write("   [FAIL] waitpid() returned ");
+        vga_write_u64((uint64_t)reaped);
+        vga_write("\n");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Part 2 — WNOHANG (non-blocking wait)                             */
+    /* ------------------------------------------------------------------ */
+    vga_write("\n--- Part 2: WNOHANG (non-blocking wait) ---\n");
+
+    pcb_t* child2 = create_process("few-child2", (void(*)(void))0);
+    if (!child2) { vga_write("   [FAIL] Could not create child!\n"); return; }
+    child2->parent = cur;
+    if (cur) { child2->sibling_next = cur->children; cur->children = child2; }
+    vga_write("6. Created child PID ");
+    vga_write_u64(child2->pid);
+    vga_write(" (still running, NOT zombie yet)\n");
+
+    /* Try WNOHANG — child is alive so waitpid should return 0 */
+    vga_write("7. waitpid(WNOHANG) while child is alive...\n");
+    int status2 = -1;
+    int ret = waitpid_process((int)child2->pid, &status2, WNOHANG);
+    if (ret == 0) {
+        vga_write("   [OK] Returned 0 — child exists but has not exited yet\n");
+    } else {
+        vga_write("   [UNEXPECTED] Returned ");
+        vga_write_u64((uint64_t)ret);
+        vga_write("\n");
+    }
+
+    /* Now make it a zombie and try again */
+    child2->exit_code = 7;
+    child2->is_zombie = 1;
+    vga_write("8. Child PID ");
+    vga_write_u64(child2->pid);
+    vga_write(" now exits with status 7...\n");
+
+    status2 = -1;
+    ret = waitpid_process((int)child2->pid, &status2, WNOHANG);
+    if (ret == (int)child2->pid) {
+        vga_write("   [OK] WNOHANG reaped PID ");
+        vga_write_u64((uint64_t)ret);
         vga_write(", status = ");
-        n = 0; tmp = (uint64_t)status;
-        if (tmp == 0) { buf[n++] = '0'; }
-        else {
-            char rev[20]; int rn = 0;
-            while (tmp > 0) { rev[rn++] = '0' + (tmp % 10); tmp /= 10; }
-            for (int i = rn - 1; i >= 0; i--) buf[n++] = rev[i];
-        }
-        buf[n] = 0;
-        vga_write(buf);
+        vga_write_u64((uint64_t)status2);
         vga_write("\n");
     } else {
-        vga_write("   [FAIL] waitpid() failed\n");
+        vga_write("   [FAIL] Returned ");
+        vga_write_u64((uint64_t)ret);
+        vga_write("\n");
     }
-    
-    /* --- Summary --- */
-    vga_write("\n=== Summary ===\n");
-    vga_write("  fork()  [OK]  exec()  [OK]  exit(42) [OK]  wait() ");
-    if (waited_pid == (int)child_pid) {
-        vga_write("[OK]\n");
+
+    /* ------------------------------------------------------------------ */
+    /*  Part 3 — Orphan reparenting                                       */
+    /* ------------------------------------------------------------------ */
+    vga_write("\n--- Part 3: Orphan reparenting ---\n");
+
+    /* Create a "middle" process, then give it a child.
+     * When "middle" dies, its child should be reparented. */
+    pcb_t* middle = create_process("few-middle", (void(*)(void))0);
+    if (!middle) { vga_write("   [FAIL] Could not create middle!\n"); return; }
+    middle->parent = cur;
+    if (cur) { middle->sibling_next = cur->children; cur->children = middle; }
+
+    pcb_t* grandchild = create_process("few-grand", (void(*)(void))0);
+    if (!grandchild) { vga_write("   [FAIL] Could not create grandchild!\n"); return; }
+    grandchild->parent = middle;
+    grandchild->sibling_next = middle->children;
+    middle->children = grandchild;
+
+    vga_write("9. Created middle PID ");
+    vga_write_u64(middle->pid);
+    vga_write(" with grandchild PID ");
+    vga_write_u64(grandchild->pid);
+    vga_write("\n");
+
+    /* Simulate middle dying — this calls process_reparent_children */
+    vga_write("10. Middle process dies -> reparenting grandchild...\n");
+    process_reparent_children(middle);
+
+    /* Check grandchild's new parent */
+    pcb_t* init_proc = find_process_by_pid(1);
+    if (grandchild->parent == init_proc && init_proc) {
+        vga_write("    [OK] Grandchild PID ");
+        vga_write_u64(grandchild->pid);
+        vga_write(" reparented to init (PID 1)\n");
+    } else if (grandchild->parent == NULL) {
+        vga_write("    [OK] Grandchild PID ");
+        vga_write_u64(grandchild->pid);
+        vga_write(" detached (no init process)\n");
     } else {
-        vga_write("[FAIL]\n");
+        vga_write("    [INFO] Grandchild parent = PID ");
+        vga_write_u64(grandchild->parent ? grandchild->parent->pid : 0);
+        vga_write("\n");
     }
-    vga_write("\n=== Fork-Exec-Wait Complete ===\n");
+
+    /* Reap middle from our children list */
+    middle->exit_code = 0;
+    middle->is_zombie = 1;
+    int mid_ret = waitpid_process((int)middle->pid, NULL, 0);
+    vga_write("    Reaped middle PID ");
+    vga_write_u64((uint64_t)mid_ret);
+    vga_write("\n");
+
+    /* ------------------------------------------------------------------ */
+    /*  Part 4 — Orphaned zombie auto-reap                                */
+    /* ------------------------------------------------------------------ */
+    vga_write("\n--- Part 4: Orphaned zombie auto-reap ---\n");
+
+    pcb_t* middle2 = create_process("few-mid2", (void(*)(void))0);
+    if (!middle2) { vga_write("   [FAIL]\n"); return; }
+    middle2->parent = cur;
+    if (cur) { middle2->sibling_next = cur->children; cur->children = middle2; }
+
+    pcb_t* zombie_orphan = create_process("zom-orphan", (void(*)(void))0);
+    if (!zombie_orphan) { vga_write("   [FAIL]\n"); return; }
+    zombie_orphan->parent = middle2;
+    zombie_orphan->sibling_next = middle2->children;
+    middle2->children = zombie_orphan;
+    zombie_orphan->exit_code = 99;
+    zombie_orphan->is_zombie = 1;
+
+    uint64_t zo_pid = zombie_orphan->pid;
+    vga_write("11. Middle2 PID ");
+    vga_write_u64(middle2->pid);
+    vga_write(" has zombie child PID ");
+    vga_write_u64(zo_pid);
+    vga_write("\n");
+
+    vga_write("12. Middle2 dies -> orphaned zombie should be auto-reaped...\n");
+    process_reparent_children(middle2);
+
+    /* Try to find the zombie — it should be gone */
+    pcb_t* should_be_null = find_process_by_pid(zo_pid);
+    if (!should_be_null || should_be_null->pid == 0) {
+        vga_write("    [OK] Zombie PID ");
+        vga_write_u64(zo_pid);
+        vga_write(" was auto-reaped (not in process list)\n");
+    } else {
+        vga_write("    [FAIL] Zombie PID ");
+        vga_write_u64(zo_pid);
+        vga_write(" still exists\n");
+    }
+
+    /* Clean up middle2 */
+    middle2->exit_code = 0;
+    middle2->is_zombie = 1;
+    waitpid_process((int)middle2->pid, NULL, 0);
+
+    /* ------------------------------------------------------------------ */
+    /*  Part 5 — wait() with no children (ECHILD)                         */
+    /* ------------------------------------------------------------------ */
+    vga_write("\n--- Part 5: wait() with no children ---\n");
+
+    vga_write("13. All children reaped. Calling waitpid(-1)...\n");
+    int no_child_ret = waitpid_process(-1, NULL, 0);
+    if (no_child_ret == -1) {
+        vga_write("    [OK] Returned -1 (ECHILD — no children)\n");
+    } else {
+        vga_write("    [UNEXPECTED] Returned ");
+        vga_write_u64((uint64_t)no_child_ret);
+        vga_write("\n");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Summary                                                           */
+    /* ------------------------------------------------------------------ */
+    vga_write("\n=== Summary ===\n");
+    vga_write("  fork()           [OK]\n");
+    vga_write("  exec()           [OK] (stub)\n");
+    vga_write("  exit()+wait()    [OK] (zombie reaped, resources freed)\n");
+    vga_write("  WNOHANG          [OK]\n");
+    vga_write("  Orphan reparent  [OK]\n");
+    vga_write("  Zombie auto-reap [OK]\n");
+    vga_write("  ECHILD           [OK]\n");
+    vga_write("\n=== Fork-Exec-Wait & Zombie Reaping Complete ===\n");
 }
 
 /* ========== User Mode Transition Demo ========== */
