@@ -278,7 +278,7 @@ void run_fork_exec_wait_demo(void) {
     /* ------------------------------------------------------------------ */
     /*  Part 1 — Basic fork / exec / exit / wait                          */
     /* ------------------------------------------------------------------ */
-    vga_write("--- Part 1: fork() -> exec() -> exit() -> wait() ---\n\n");
+    vga_write("--- Part 1: fork() -> exec() -> exit() -> wait() ---\n");
 
     /* Step 1: show current process */
     vga_write("1. Current process: PID = ");
@@ -330,7 +330,7 @@ void run_fork_exec_wait_demo(void) {
     /* ------------------------------------------------------------------ */
     /*  Part 2 — WNOHANG (non-blocking wait)                             */
     /* ------------------------------------------------------------------ */
-    vga_write("\n--- Part 2: WNOHANG (non-blocking wait) ---\n\n");
+    vga_write("\n--- Part 2: WNOHANG (non-blocking wait) ---\n");
 
     pcb_t* child2 = create_process("few-child2", (void(*)(void))0);
     if (!child2) { vga_write("   [FAIL] Could not create child!\n"); return; }
@@ -376,7 +376,7 @@ void run_fork_exec_wait_demo(void) {
     /* ------------------------------------------------------------------ */
     /*  Part 3 — Orphan reparenting                                       */
     /* ------------------------------------------------------------------ */
-    vga_write("\n--- Part 3: Orphan reparenting ---\n\n");
+    vga_write("\n--- Part 3: Orphan reparenting ---\n");
 
     /* Create a "middle" process, then give it a child.
      * When "middle" dies, its child should be reparented. */
@@ -428,7 +428,7 @@ void run_fork_exec_wait_demo(void) {
     /* ------------------------------------------------------------------ */
     /*  Part 4 — Orphaned zombie auto-reap                                */
     /* ------------------------------------------------------------------ */
-    vga_write("\n--- Part 4: Orphaned zombie auto-reap ---\n\n");
+    vga_write("\n--- Part 4: Orphaned zombie auto-reap ---\n");
 
     pcb_t* middle2 = create_process("few-mid2", (void(*)(void))0);
     if (!middle2) { vga_write("   [FAIL]\n"); return; }
@@ -473,7 +473,7 @@ void run_fork_exec_wait_demo(void) {
     /* ------------------------------------------------------------------ */
     /*  Part 5 — wait() with no children (ECHILD)                         */
     /* ------------------------------------------------------------------ */
-    vga_write("\n--- Part 5: wait() with no children ---\n\n");
+    vga_write("\n--- Part 5: wait() with no children ---\n");
 
     vga_write("13. All children reaped. Calling waitpid(-1)...\n");
     int no_child_ret = waitpid_process(-1, NULL, 0);
