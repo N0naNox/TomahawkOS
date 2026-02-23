@@ -13,6 +13,7 @@
 #include "include/string.h"
 #include "include/vga.h"
 #include "include/shell_fs_cmd.h"
+#include "include/demos.h"
 #include "include/init_config.h"
 #include <uart.h>
 #include <stddef.h>
@@ -466,6 +467,11 @@ int shell_fs_dispatch(const char *cmdline) {
     }
     if (strcmp(cmd, "initconf") == 0) {
         cmd_initconf(args);
+        return 0;
+    }
+
+    if (strcmp(cmd, "jobdemo") == 0) {
+        run_job_control_demo();
         return 0;
     }
 

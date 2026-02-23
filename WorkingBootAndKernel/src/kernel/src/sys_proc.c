@@ -70,3 +70,46 @@ uint64_t sys_wait(int* status) {
 uint64_t sys_waitpid(int pid, int* status, int options) {
     return (uint64_t)waitpid_process(pid, status, options);
 }
+
+/* ===== Job control syscall implementations ===== */
+
+uint64_t sys_setpgid(uint64_t pid, uint64_t pgid) {
+    pcb_t* target;
+    if (pid == 0) {
+        target = get_current_process();
+    } else {
+        target = find_process_by_pid(pid);
+    }
+    if (!target) return (uint64_t)-1;
+    return (uint64_t)setpgid(target, pgid);
+}
+
+uint64_t sys_getpgid(uint64_t pid) {
+    pcb_t* target;
+    if (pid == 0) {
+        target = get_current_process();
+    } else {
+        target = find_process_by_pid(pid);
+    }
+    if (!target) return (uint64_t)-1;
+    return target->pgid;
+}
+
+uint64_t sys_setsid(void) {
+    pcb_t* proc = get_current_process();
+    if (!proc) return (uint64_t)-1;
+    return (uint64_t)setsid(proc);
+}
+
+uint64_t sys_tcsetpgrp(uint64_t pgid) {
+    pcb_t* proc = get_current_process();
+    if (!proc) return (uint64_t)-1;
+    session_set_foreground(proc->sid, pgid);
+    return 0;
+}
+
+uint64_t sys_tcgetpgrp(void) {
+    pcb_t* proc = get_current_process();
+    if (!proc) return (uint64_t)-1;
+    return session_get_foreground(proc->sid);
+}

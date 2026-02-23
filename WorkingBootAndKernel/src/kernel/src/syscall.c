@@ -300,6 +300,27 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             }
             return (uint64_t)-1;
 
+        /* ===== Job control syscalls ===== */
+        case SYS_SETPGID:
+            return sys_setpgid(arg1, arg2);
+
+        case SYS_GETPGID:
+            return sys_getpgid(arg1);
+
+        case SYS_SETSID:
+            return sys_setsid();
+
+        case SYS_TCSETPGRP:
+            return sys_tcsetpgrp(arg1);
+
+        case SYS_TCGETPGRP:
+            return sys_tcgetpgrp();
+
+        case SYS_RUN_JOB_CONTROL_DEMO:
+            vga_write("\n");
+            run_job_control_demo();
+            return 0;
+
         case 99:
             /* Exit from usermode password demo - return to kernel */
             __asm__ volatile(

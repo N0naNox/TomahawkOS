@@ -46,7 +46,11 @@ typedef struct pcb {
 
     uint32_t uid;
     uint32_t gid;
-    
+
+    /* Job control */
+    uint64_t pgid;              /* process group ID */
+    uint64_t sid;               /* session ID */
+    int is_stopped;             /* 1 if stopped by SIGTSTP/SIGSTOP */
 
     mm_struct* mm;              /* address space info */
     tcb_t* main_thread;
@@ -99,5 +103,23 @@ void process_reap(pcb_t* child);
 
 /* Reparent all children of 'dying' to init (PID 1) or discard zombies */
 void process_reparent_children(pcb_t* dying);
+
+/* ===== Job control ===== */
+
+/* Set process group ID.  If pgid == 0, use the process's own PID. */
+int setpgid(pcb_t* proc, uint64_t pgid);
+
+/* Create a new session (proc becomes leader, pgid = sid = pid). */
+int setsid(pcb_t* proc);
+
+/* Send a signal to every process in a given process group. */
+int signal_process_group(uint64_t pgid, int signo);
+
+/* Per-session foreground group tracking. */
+void session_set_foreground(uint64_t sid, uint64_t pgid);
+uint64_t session_get_foreground(uint64_t sid);
+
+/* Continue a stopped process (SIGCONT handler). */
+void process_continue(pcb_t* proc);
 
 #endif /* PROC_H */

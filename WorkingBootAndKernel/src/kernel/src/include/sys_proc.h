@@ -18,3 +18,10 @@ uint64_t sys_exec(const char* path, char* const argv[]);
 uint64_t sys_wait(int* status);
 uint64_t sys_waitpid(int pid, int* status, int options);
 
+/* Job control syscalls */
+uint64_t sys_setpgid(uint64_t pid, uint64_t pgid);
+uint64_t sys_getpgid(uint64_t pid);
+uint64_t sys_setsid(void);
+uint64_t sys_tcsetpgrp(uint64_t pgid);
+uint64_t sys_tcgetpgrp(void);
+

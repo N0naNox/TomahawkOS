@@ -36,3 +36,11 @@
 
 /* Shell filesystem command dispatch */
 #define SYS_SHELL_CMD 31
+
+/* Job control syscalls */
+#define SYS_SETPGID    32
+#define SYS_GETPGID    33
+#define SYS_SETSID     34
+#define SYS_TCSETPGRP  35   /* set foreground group for session */
+#define SYS_TCGETPGRP  36   /* get foreground group for session */
+#define SYS_RUN_JOB_CONTROL_DEMO 37

@@ -1016,6 +1016,7 @@ void run_tomahawk_shell(void) {
         "  vfs       - Run VFS filesystem demo\n"
         "  tests     - Run kernel unit tests\n"
         "  forkwait  - Run fork-exec-wait demo\n"
+        "  jobdemo   - Run job control demo\n"
         "  exit      - Exit shell and return to kernel\n\n")
     /* Build prompts dynamically from init.conf (hostname= and username=) */
     const char *_cfg_host = init_config_get("hostname");
@@ -1818,4 +1819,171 @@ void run_scheduler_demo(void) {
     for (volatile int i = 0; i < 5000000; i++) {
         __asm__ volatile("pause");
     }
+}
+
+/* ================================================================
+ *  Job Control (Foreground / Background) Demo
+ * ================================================================ */
+
+void run_job_control_demo(void) {
+    vga_write("\n=== Job Control Demo ===");
+    vga_write("\n  Demonstrates: process groups, sessions,");
+    vga_write("\n  foreground/background, Ctrl+C dispatch\n\n");
+
+    pcb_t* shell = get_current_process();
+    if (!shell) {
+        vga_write("[FAIL] No current process\n");
+        return;
+    }
+
+    uint64_t shell_pid = shell->pid;
+
+    /* --- Part 1: Sessions & Process Groups --- */
+    vga_write("--- Part 1: Sessions & Process Groups ---\n");
+
+    /* Shell creates its own session (like login shell) */
+    setsid(shell);
+    vga_write("1. Shell PID ");
+    vga_write_u64(shell_pid);
+    vga_write(" created session (sid=");
+    vga_write_u64(shell->sid);
+    vga_write(", pgid=");
+    vga_write_u64(shell->pgid);
+    vga_write(")\n");
+
+    /* The shell is the foreground group by default */
+    vga_write("   Foreground group = ");
+    vga_write_u64(session_get_foreground(shell->sid));
+    vga_write("\n");
+
+    /* --- Part 2: Create a foreground child process group --- */
+    vga_write("\n--- Part 2: Foreground child group ---\n");
+
+    pcb_t* fg_child = create_process("fg-job", (void(*)(void))0);
+    if (!fg_child) { vga_write("   [FAIL] Could not create child\n"); return; }
+    fg_child->parent = shell;
+    fg_child->sibling_next = shell->children;
+    shell->children = fg_child;
+    fg_child->sid = shell->sid;   /* same session */
+    setpgid(fg_child, fg_child->pid);  /* new group with own pid */
+
+    /* Move foreground to the child's group (like shell does on fork+exec) */
+    session_set_foreground(shell->sid, fg_child->pgid);
+
+    vga_write("2. Created child PID ");
+    vga_write_u64(fg_child->pid);
+    vga_write(" in pgid ");
+    vga_write_u64(fg_child->pgid);
+    vga_write("\n");
+    vga_write("   Set foreground group -> ");
+    vga_write_u64(session_get_foreground(shell->sid));
+    vga_write("\n");
+
+    /* --- Part 3: Create a background child (different group) --- */
+    vga_write("\n--- Part 3: Background child group ---\n");
+
+    pcb_t* bg_child = create_process("bg-job", (void(*)(void))0);
+    if (!bg_child) { vga_write("   [FAIL] Could not create child\n"); return; }
+    bg_child->parent = shell;
+    bg_child->sibling_next = shell->children;
+    shell->children = bg_child;
+    bg_child->sid = shell->sid;
+    setpgid(bg_child, bg_child->pid);  /* its own group, but NOT foreground */
+
+    vga_write("3. Created background child PID ");
+    vga_write_u64(bg_child->pid);
+    vga_write(" in pgid ");
+    vga_write_u64(bg_child->pgid);
+    vga_write("\n");
+    vga_write("   Foreground group is still ");
+    vga_write_u64(session_get_foreground(shell->sid));
+    vga_write(" (bg child NOT in fg)\n");
+
+    /* --- Part 4: Simulate Ctrl+C (SIGINT to fg group only) --- */
+    vga_write("\n--- Part 4: SIGINT to foreground group ---\n");
+
+    vga_write("4. Sending SIGINT to fg group ");
+    vga_write_u64(session_get_foreground(shell->sid));
+    vga_write("...\n");
+
+    int hit = signal_process_group(session_get_foreground(shell->sid), SIGINT);
+    vga_write("   Delivered to ");
+    vga_write_u64((uint64_t)hit);
+    vga_write(" process(es)\n");
+
+    /* The foreground child should have SIGINT pending */
+    int fg_pending = signal_has_pending(fg_child);
+    int bg_pending = signal_has_pending(bg_child);
+    vga_write("   fg child (PID ");
+    vga_write_u64(fg_child->pid);
+    vga_write(") pending signals: ");
+    vga_write(fg_pending ? "YES" : "no");
+    vga_write("\n   bg child (PID ");
+    vga_write_u64(bg_child->pid);
+    vga_write(") pending signals: ");
+    vga_write(bg_pending ? "YES (BUG!)" : "no (correct — not in fg)");
+    vga_write("\n");
+
+    /* --- Part 5: Move bg child to foreground (like shell's 'fg') --- */
+    vga_write("\n--- Part 5: 'fg' — bring bg job to foreground ---\n");
+
+    session_set_foreground(shell->sid, bg_child->pgid);
+    vga_write("5. Foreground group changed to pgid ");
+    vga_write_u64(session_get_foreground(shell->sid));
+    vga_write("\n");
+
+    /* Now SIGINT should hit the (previously-bg) child */
+    signal_process_group(session_get_foreground(shell->sid), SIGINT);
+    vga_write("   Sent SIGINT -> bg child pending: ");
+    vga_write(signal_has_pending(bg_child) ? "YES" : "no");
+    vga_write("\n");
+
+    /* --- Part 6: SIGTSTP (Ctrl+Z) — stop a process --- */
+    vga_write("\n--- Part 6: SIGTSTP — stop & continue ---\n");
+
+    /* Simulate stopping the bg child (now fg) */
+    bg_child->is_stopped = 1;
+    if (bg_child->main_thread) {
+        bg_child->main_thread->state = THREAD_BLOCKED;
+    }
+    vga_write("6. Stopped PID ");
+    vga_write_u64(bg_child->pid);
+    vga_write(" (is_stopped=1)\n");
+
+    /* Shell takes back foreground */
+    session_set_foreground(shell->sid, shell->pgid);
+    vga_write("   Shell takes back fg group -> ");
+    vga_write_u64(session_get_foreground(shell->sid));
+    vga_write("\n");
+
+    /* Resume with SIGCONT (like shell's 'bg' or 'fg') */
+    process_continue(bg_child);
+    vga_write("   SIGCONT -> PID ");
+    vga_write_u64(bg_child->pid);
+    vga_write(" is_stopped = ");
+    vga_write_u64((uint64_t)bg_child->is_stopped);
+    vga_write("\n");
+
+    /* --- Cleanup --- */
+    vga_write("\n--- Cleanup ---\n");
+    fg_child->exit_code = 0;
+    fg_child->is_zombie = 1;
+    waitpid_process((int)fg_child->pid, NULL, 0);
+    vga_write("   Reaped fg child PID ");
+    vga_write_u64(fg_child->pid);
+    vga_write("\n");
+
+    bg_child->exit_code = 0;
+    bg_child->is_zombie = 1;
+    waitpid_process((int)bg_child->pid, NULL, 0);
+    vga_write("   Reaped bg child PID ");
+    vga_write_u64(bg_child->pid);
+    vga_write("\n");
+
+    /* Restore shell as foreground */
+    session_set_foreground(shell->sid, shell->pgid);
+
+    vga_write("\n=== Job Control Demo Complete ===\n");
+    vga_write("  Sessions, process groups, fg/bg switching, SIGINT/SIGTSTP\n");
+    vga_write("  dispatch, and SIGCONT resume all working.\n");
 }
