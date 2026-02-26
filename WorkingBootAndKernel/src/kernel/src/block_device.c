@@ -11,6 +11,7 @@
 #include "include/block_device.h"
 #include "include/frame_alloc.h"
 #include "include/string.h"
+#include "include/spinlock.h"
 #include <uart.h>
 
 /* ========== Internal Structures ========== */
@@ -48,7 +49,24 @@ static struct buffer_cache_stats cache_stats = {0};
 /* Initialization flag */
 static int block_subsystem_initialized = 0;
 
+/*
+ * Buffer-cache lock — protects buffer_hash[], lru_head/tail, free_buffers,
+ * buffer_pool[], and cache_stats.  Always acquired with IRQ-save so that
+ * interrupt-driven I/O completion paths cannot deadlock.
+ * Internal (static) helpers are called with the lock already held.
+ */
+static spinlock_t s_cache_lock = SPINLOCK_INIT;
+
+/*
+ * Device-registry lock — protects registered_devices[] and num_devices.
+ */
+static spinlock_t s_dev_lock = SPINLOCK_INIT;
+
 /* ========== Helper Functions ========== */
+
+/* Forward declaration — buffer_sync_internal is defined after buffer_cache_init
+   but is called inside buffer_alloc (also a helper).  Caller must hold s_cache_lock. */
+static int buffer_sync_internal(struct buffer_head *bh);
 
 /* Hash function for buffer lookup */
 static uint32_t buffer_hash_func(struct block_device *dev, uint64_t block_num) {
@@ -150,7 +168,7 @@ static struct buffer_head *buffer_alloc(void) {
         if (!(bh->flags & (BUF_BUSY | BUF_PINNED)) && bh->ref_count == 0) {
             /* Write back if dirty */
             if (bh->flags & BUF_DIRTY) {
-                buffer_sync(bh);
+                buffer_sync_internal(bh);  /* called under s_cache_lock */
             }
             
             /* Remove from hash and LRU */
@@ -218,7 +236,10 @@ struct buffer_head *buffer_get(struct block_device *dev, uint64_t block_num) {
     if (!dev || !dev->ops || !dev->ops->read_block) {
         return NULL;
     }
-    
+
+    uint64_t flags;
+    spin_lock_irqsave(&s_cache_lock, &flags);
+
     /* Check if already cached */
     struct buffer_head *bh = buffer_find(dev, block_num);
     if (bh) {
@@ -226,24 +247,26 @@ struct buffer_head *buffer_get(struct block_device *dev, uint64_t block_num) {
         bh->flags |= BUF_BUSY;
         lru_touch(bh);
         cache_stats.hits++;
+        spin_unlock_irqrestore(&s_cache_lock, &flags);
         return bh;
     }
-    
+
     cache_stats.misses++;
-    
+
     /* Allocate new buffer */
     bh = buffer_alloc();
     if (!bh) {
+        spin_unlock_irqrestore(&s_cache_lock, &flags);
         return NULL;
     }
-    
+
     /* Setup buffer */
     bh->dev = dev;
     bh->block_num = block_num;
     bh->ref_count = 1;
     bh->flags = BUF_BUSY;
-    
-    /* Read block from device */
+
+    /* Read block from device (RAM device — safe to call under lock) */
     if (dev->ops->read_block(dev, block_num, bh->data) != 0) {
         uart_puts("[BLOCK] ERROR: Failed to read block ");
         uart_putu(block_num);
@@ -251,17 +274,19 @@ struct buffer_head *buffer_get(struct block_device *dev, uint64_t block_num) {
         /* Return buffer to free list */
         bh->hash_next = free_buffers;
         free_buffers = bh;
+        spin_unlock_irqrestore(&s_cache_lock, &flags);
         return NULL;
     }
-    
+
     bh->flags |= BUF_VALID;
     cache_stats.reads++;
     cache_stats.cached_blocks++;
-    
+
     /* Add to hash table and LRU */
     buffer_hash_add(bh);
     lru_add_front(bh);
-    
+
+    spin_unlock_irqrestore(&s_cache_lock, &flags);
     return bh;
 }
 
@@ -269,7 +294,10 @@ struct buffer_head *buffer_get_new(struct block_device *dev, uint64_t block_num)
     if (!dev) {
         return NULL;
     }
-    
+
+    uint64_t flags;
+    spin_lock_irqsave(&s_cache_lock, &flags);
+
     /* Check if already cached */
     struct buffer_head *bh = buffer_find(dev, block_num);
     if (bh) {
@@ -278,49 +306,68 @@ struct buffer_head *buffer_get_new(struct block_device *dev, uint64_t block_num)
         lru_touch(bh);
         /* Mark as valid since we're going to overwrite */
         bh->flags |= BUF_VALID;
+        spin_unlock_irqrestore(&s_cache_lock, &flags);
         return bh;
     }
-    
+
     /* Allocate new buffer without reading */
     bh = buffer_alloc();
     if (!bh) {
+        spin_unlock_irqrestore(&s_cache_lock, &flags);
         return NULL;
     }
-    
+
     /* Setup buffer */
     bh->dev = dev;
     bh->block_num = block_num;
     bh->ref_count = 1;
     bh->flags = BUF_BUSY | BUF_VALID;
-    
+
     cache_stats.cached_blocks++;
-    
+
     /* Add to hash table and LRU */
     buffer_hash_add(bh);
     lru_add_front(bh);
-    
+
+    spin_unlock_irqrestore(&s_cache_lock, &flags);
     return bh;
 }
 
 void buffer_release(struct buffer_head *bh) {
     if (!bh) return;
-    
+    uint64_t flags;
+    spin_lock_irqsave(&s_cache_lock, &flags);
     if (bh->ref_count > 0) {
         bh->ref_count--;
     }
     bh->flags &= ~BUF_BUSY;
+    spin_unlock_irqrestore(&s_cache_lock, &flags);
 }
 
 void buffer_mark_dirty(struct buffer_head *bh) {
     if (!bh) return;
-    
+    uint64_t flags;
+    spin_lock_irqsave(&s_cache_lock, &flags);
     if (!(bh->flags & BUF_DIRTY)) {
         bh->flags |= BUF_DIRTY;
         cache_stats.dirty_blocks++;
     }
+    spin_unlock_irqrestore(&s_cache_lock, &flags);
 }
 
 int buffer_sync(struct buffer_head *bh) {
+    if (!bh || !bh->dev || !(bh->flags & BUF_DIRTY)) {
+        return 0;
+    }
+    uint64_t flags;
+    spin_lock_irqsave(&s_cache_lock, &flags);
+    int ret = buffer_sync_internal(bh);
+    spin_unlock_irqrestore(&s_cache_lock, &flags);
+    return ret;
+}
+
+/* Internal sync — caller must hold s_cache_lock */
+static int buffer_sync_internal(struct buffer_head *bh) {
     if (!bh || !bh->dev || !(bh->flags & BUF_DIRTY)) {
         return 0;
     }
@@ -343,40 +390,48 @@ int buffer_sync(struct buffer_head *bh) {
 
 int buffer_sync_all(struct block_device *dev) {
     int errors = 0;
-    
+
+    uint64_t flags;
+    spin_lock_irqsave(&s_cache_lock, &flags);
+
     /* Walk through all cached buffers */
     for (int i = 0; i < BUFFER_CACHE_SIZE; i++) {
         struct buffer_head *bh = &buffer_pool[i];
         if ((bh->flags & BUF_DIRTY) && (!dev || bh->dev == dev)) {
-            if (buffer_sync(bh) != 0) {
+            if (buffer_sync_internal(bh) != 0) {
                 errors++;
             }
         }
     }
-    
-    /* Call device sync if available */
+
+    spin_unlock_irqrestore(&s_cache_lock, &flags);
+
+    /* Call device sync if available (outside the cache lock) */
     if (dev && dev->ops && dev->ops->sync) {
         dev->ops->sync(dev);
     }
-    
+
     return errors > 0 ? -1 : 0;
 }
 
 void buffer_invalidate(struct block_device *dev) {
+    uint64_t flags;
+    spin_lock_irqsave(&s_cache_lock, &flags);
+
     for (int i = 0; i < BUFFER_CACHE_SIZE; i++) {
         struct buffer_head *bh = &buffer_pool[i];
         if (bh->dev == dev) {
-            /* Sync dirty buffers first */
+            /* Sync dirty buffers first (internal, under lock) */
             if (bh->flags & BUF_DIRTY) {
-                buffer_sync(bh);
+                buffer_sync_internal(bh);
             }
-            
+
             /* Remove from hash and LRU */
             buffer_hash_remove(bh);
             if (bh->lru_prev || bh->lru_next || bh == lru_head) {
                 lru_remove(bh);
             }
-            
+
             /* Return to free list */
             bh->dev = NULL;
             bh->block_num = 0;
@@ -384,15 +439,20 @@ void buffer_invalidate(struct block_device *dev) {
             bh->ref_count = 0;
             bh->hash_next = free_buffers;
             free_buffers = bh;
-            
+
             cache_stats.cached_blocks--;
         }
     }
+
+    spin_unlock_irqrestore(&s_cache_lock, &flags);
 }
 
 void buffer_cache_get_stats(struct buffer_cache_stats *stats) {
     if (stats) {
+        uint64_t flags;
+        spin_lock_irqsave(&s_cache_lock, &flags);
         *stats = cache_stats;
+        spin_unlock_irqrestore(&s_cache_lock, &flags);
     }
 }
 
@@ -513,29 +573,36 @@ int block_device_register(struct block_device *dev) {
     if (!dev || !dev->ops) {
         return -1;
     }
-    
+
+    uint64_t flags;
+    spin_lock_irqsave(&s_dev_lock, &flags);
+
     if (num_devices >= MAX_BLOCK_DEVICES) {
+        spin_unlock_irqrestore(&s_dev_lock, &flags);
         uart_puts("[BLOCK] ERROR: Too many devices\n");
         return -1;
     }
-    
+
     /* Check for duplicate name */
     for (int i = 0; i < num_devices; i++) {
         if (registered_devices[i] && strcmp(registered_devices[i]->name, dev->name) == 0) {
+            spin_unlock_irqrestore(&s_dev_lock, &flags);
             uart_puts("[BLOCK] ERROR: Device name already exists\n");
             return -1;
         }
     }
-    
+
     registered_devices[num_devices++] = dev;
     dev->ref_count = 1;
-    
+
+    spin_unlock_irqrestore(&s_dev_lock, &flags);
+
     uart_puts("[BLOCK] Registered device: ");
     uart_puts(dev->name);
     uart_puts(" (");
     uart_putu(dev->total_blocks);
     uart_puts(" blocks)\n");
-    
+
     return 0;
 }
 
@@ -543,44 +610,60 @@ int block_device_unregister(struct block_device *dev) {
     if (!dev) {
         return -1;
     }
-    
-    /* Find and remove device */
+
+    uint64_t flags;
+    spin_lock_irqsave(&s_dev_lock, &flags);
+
+    /* Find and remove device from registry */
     for (int i = 0; i < num_devices; i++) {
         if (registered_devices[i] == dev) {
-            /* Invalidate all buffers for this device */
-            buffer_invalidate(dev);
-            
-            /* Remove from list */
+            /* Remove from list while holding dev lock */
             for (int j = i; j < num_devices - 1; j++) {
                 registered_devices[j] = registered_devices[j + 1];
             }
             registered_devices[--num_devices] = NULL;
-            
+
+            spin_unlock_irqrestore(&s_dev_lock, &flags);
+
+            /* Invalidate all buffers for this device outside the dev lock
+               (buffer_invalidate acquires s_cache_lock internally) */
+            buffer_invalidate(dev);
+
             uart_puts("[BLOCK] Unregistered device: ");
             uart_puts(dev->name);
             uart_puts("\n");
-            
+
             return 0;
         }
     }
-    
+
+    spin_unlock_irqrestore(&s_dev_lock, &flags);
     return -1;
 }
 
 struct block_device *block_device_get(const char *name) {
+    uint64_t flags;
+    spin_lock_irqsave(&s_dev_lock, &flags);
     for (int i = 0; i < num_devices; i++) {
         if (registered_devices[i] && strcmp(registered_devices[i]->name, name) == 0) {
             registered_devices[i]->ref_count++;
-            return registered_devices[i];
+            struct block_device *dev = registered_devices[i];
+            spin_unlock_irqrestore(&s_dev_lock, &flags);
+            return dev;
         }
     }
+    spin_unlock_irqrestore(&s_dev_lock, &flags);
     return NULL;
 }
 
 void block_device_put(struct block_device *dev) {
-    if (dev && dev->ref_count > 0) {
+    if (!dev) return;
+    uint64_t flags;
+    spin_lock_irqsave(&s_dev_lock, &flags);
+    if (dev->ref_count > 0) {
         dev->ref_count--;
     }
+    spin_unlock_irqrestore(&s_dev_lock, &flags);
 }
 
 /* ========== RAM Block Device Implementation ========== */

@@ -12,6 +12,8 @@
 #include "include/demos.h"
 #include "include/tests.h"
 #include "include/shell_fs_cmd.h"
+#include "include/vfs.h"
+#include "include/vnode.h"
 #include "uart.h"
 
 /* External saved context from usermode demo */
@@ -320,6 +322,72 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             vga_write("\n");
             run_job_control_demo();
             return 0;
+
+        /* ===== Filesystem metadata mutation syscalls ===== */
+        case SYS_UNLINK:
+            /* arg1 = parent directory path (const char *)
+               arg2 = name to remove (const char *) */
+            if (arg1 && arg2) {
+                struct vnode *parent = vfs_resolve_path((const char *)arg1);
+                if (!parent) return (uint64_t)-1;
+                return (uint64_t)vfs_unlink(parent, (const char *)arg2);
+            }
+            return (uint64_t)-1;
+
+        case SYS_RENAME:
+            /* arg1 = old full path (const char *)
+               arg2 = new full path (const char *)
+               Splits each path into parent dir + basename. */
+            if (arg1 && arg2) {
+                const char *old_path = (const char *)arg1;
+                const char *new_path = (const char *)arg2;
+
+                /* Helper: find last '/' and split */
+                char old_parent_buf[256], new_parent_buf[256];
+                const char *old_name, *new_name;
+
+                const char *old_slash = old_path;
+                const char *p;
+                for (p = old_path; *p; p++) if (*p == '/') old_slash = p;
+                if (old_slash == old_path) {
+                    old_parent_buf[0] = '/'; old_parent_buf[1] = '\0';
+                    old_name = old_path + 1;
+                } else {
+                    int len = (int)(old_slash - old_path);
+                    if (len >= 255) len = 255;
+                    for (int i = 0; i < len; i++) old_parent_buf[i] = old_path[i];
+                    old_parent_buf[len] = '\0';
+                    old_name = old_slash + 1;
+                }
+
+                const char *new_slash = new_path;
+                for (p = new_path; *p; p++) if (*p == '/') new_slash = p;
+                if (new_slash == new_path) {
+                    new_parent_buf[0] = '/'; new_parent_buf[1] = '\0';
+                    new_name = new_path + 1;
+                } else {
+                    int len = (int)(new_slash - new_path);
+                    if (len >= 255) len = 255;
+                    for (int i = 0; i < len; i++) new_parent_buf[i] = new_path[i];
+                    new_parent_buf[len] = '\0';
+                    new_name = new_slash + 1;
+                }
+
+                struct vnode *old_parent = vfs_resolve_path(old_parent_buf);
+                struct vnode *new_parent = vfs_resolve_path(new_parent_buf);
+                if (!old_parent || !new_parent) return (uint64_t)-1;
+                return (uint64_t)vfs_rename(old_parent, old_name, new_parent, new_name);
+            }
+            return (uint64_t)-1;
+
+        case SYS_CHMOD:
+            /* arg1 = path (const char *), arg2 = mode (uint16_t) */
+            if (arg1) {
+                struct vnode *vp = vfs_resolve_path((const char *)arg1);
+                if (!vp) return (uint64_t)-1;
+                return (uint64_t)vfs_chmod(vp, (uint16_t)arg2);
+            }
+            return (uint64_t)-1;
 
         case 99:
             /* Exit from usermode password demo - return to kernel */

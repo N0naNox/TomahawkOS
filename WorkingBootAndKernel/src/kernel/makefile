@@ -74,7 +74,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/block_device.c \
 	${SRC_DIR}/mount.c \
 	${SRC_DIR}/shell_fs_cmd.c \
-	${SRC_DIR}/init_config.c
+	${SRC_DIR}/init_config.c \
+	${SRC_DIR}/spinlock.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})

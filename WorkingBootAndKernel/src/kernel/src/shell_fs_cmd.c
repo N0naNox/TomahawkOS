@@ -417,6 +417,161 @@ static void cmd_initconf(const char *args) {
     init_config_dump();
 }
 
+/* ========== rm ========== */
+
+static void cmd_rm(const char *args) {
+    const char *path = skip_spaces(args);
+    if (*path == '\0') {
+        vga_write("rm: missing operand\n");
+        return;
+    }
+
+    /* Split path into parent directory and basename */
+    const char *last_slash = NULL;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/') last_slash = p;
+    }
+
+    struct vnode *parent;
+    const char *name;
+
+    if (!last_slash || last_slash == path) {
+        parent = vfs_get_root();
+        name = (last_slash == path) ? path + 1 : path;
+    } else {
+        char parent_path[256];
+        int plen = (int)(last_slash - path);
+        if (plen >= 256) plen = 255;
+        for (int i = 0; i < plen; i++) parent_path[i] = path[i];
+        parent_path[plen] = '\0';
+        parent = vfs_resolve_path(parent_path);
+        name = last_slash + 1;
+    }
+
+    if (!parent || *name == '\0') {
+        vga_write("rm: cannot remove '");
+        vga_write(path);
+        vga_write("': invalid path\n");
+        return;
+    }
+
+    if (vfs_unlink(parent, name) != 0) {
+        vga_write("rm: cannot remove '");
+        vga_write(path);
+        vga_write("': No such file or directory\n");
+    }
+}
+
+/* ========== mv ========== */
+
+static void cmd_mv(const char *args) {
+    char src[256];
+    const char *rest = next_token(args, src, 256);
+    char dst[256];
+    next_token(rest, dst, 256);
+
+    if (src[0] == '\0' || dst[0] == '\0') {
+        vga_write("mv: usage: mv <src> <dst>\n");
+        return;
+    }
+
+    /* Helper: split path into parent path + basename */
+    const char *src_slash = src;
+    for (const char *p = src; *p; p++) if (*p == '/') src_slash = p;
+    struct vnode *src_parent;
+    const char *src_name;
+    char src_parent_path[256];
+    if (src_slash == src) {
+        src_parent = vfs_get_root();
+        src_name = src + (src[0] == '/' ? 1 : 0);
+    } else {
+        int len = (int)(src_slash - src);
+        if (len >= 256) len = 255;
+        for (int i = 0; i < len; i++) src_parent_path[i] = src[i];
+        src_parent_path[len] = '\0';
+        src_parent = vfs_resolve_path(src_parent_path);
+        src_name = src_slash + 1;
+    }
+
+    const char *dst_slash = dst;
+    for (const char *p = dst; *p; p++) if (*p == '/') dst_slash = p;
+    struct vnode *dst_parent;
+    const char *dst_name;
+    char dst_parent_path[256];
+    if (dst_slash == dst) {
+        dst_parent = vfs_get_root();
+        dst_name = dst + (dst[0] == '/' ? 1 : 0);
+    } else {
+        int len = (int)(dst_slash - dst);
+        if (len >= 256) len = 255;
+        for (int i = 0; i < len; i++) dst_parent_path[i] = dst[i];
+        dst_parent_path[len] = '\0';
+        dst_parent = vfs_resolve_path(dst_parent_path);
+        dst_name = dst_slash + 1;
+    }
+
+    if (!src_parent || !dst_parent) {
+        vga_write("mv: cannot stat: No such file or directory\n");
+        return;
+    }
+
+    /* If dst is an existing directory, move src inside it */
+    struct vnode *dst_vp = vfs_resolve_path(dst);
+    if (dst_vp && dst_vp->v_type == VDIR) {
+        dst_parent = dst_vp;
+        dst_name = src_name;  /* keep the basename */
+    }
+
+    if (vfs_rename(src_parent, src_name, dst_parent, dst_name) != 0) {
+        vga_write("mv: cannot move '");
+        vga_write(src);
+        vga_write("' to '");
+        vga_write(dst);
+        vga_write("'\n");
+    }
+}
+
+/* ========== chmod ========== */
+
+static void cmd_chmod(const char *args) {
+    char mode_str[16];
+    const char *rest = next_token(args, mode_str, 16);
+    char path[256];
+    next_token(rest, path, 256);
+
+    if (mode_str[0] == '\0' || path[0] == '\0') {
+        vga_write("chmod: usage: chmod <octal-mode> <path>\n");
+        return;
+    }
+
+    /* Parse octal mode string */
+    uint16_t mode = 0;
+    for (int i = 0; mode_str[i]; i++) {
+        char c = mode_str[i];
+        if (c < '0' || c > '7') {
+            vga_write("chmod: invalid mode '");
+            vga_write(mode_str);
+            vga_write("'\n");
+            return;
+        }
+        mode = (uint16_t)((mode << 3) | (uint16_t)(c - '0'));
+    }
+
+    struct vnode *vp = vfs_resolve_path(path);
+    if (!vp) {
+        vga_write("chmod: cannot access '");
+        vga_write(path);
+        vga_write("': No such file or directory\n");
+        return;
+    }
+
+    if (vfs_chmod(vp, mode) != 0) {
+        vga_write("chmod: failed to change mode of '");
+        vga_write(path);
+        vga_write("'\n");
+    }
+}
+
 /* ========== Main dispatcher ========== */
 
 /**
@@ -472,6 +627,18 @@ int shell_fs_dispatch(const char *cmdline) {
 
     if (strcmp(cmd, "jobdemo") == 0) {
         run_job_control_demo();
+        return 0;
+    }
+    if (strcmp(cmd, "rm") == 0) {
+        cmd_rm(args);
+        return 0;
+    }
+    if (strcmp(cmd, "mv") == 0) {
+        cmd_mv(args);
+        return 0;
+    }
+    if (strcmp(cmd, "chmod") == 0) {
+        cmd_chmod(args);
         return 0;
     }
 
