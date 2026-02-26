@@ -15,6 +15,7 @@
 #include "include/frame_alloc.h"
 #include "include/string.h"
 #include "include/uart.h"
+#include "include/spinlock.h"
 
 /* ========== Global State ========== */
 
@@ -26,6 +27,19 @@ static struct mount_table mounts = {0};
 
 /* RAM block device for root filesystem */
 static struct block_device *root_block_device = NULL;
+
+/*
+ * Filesystem-registry lock — protects registered_fs linked list.
+ * Held during fs_register() and fs_find().
+ */
+static spinlock_t s_fs_list_lock = SPINLOCK_INIT;
+
+/*
+ * Mount-table lock — protects mounts (entries array, count, root pointer)
+ * and root_block_device.
+ * Held during do_mount(), do_unmount(), mount_lookup(), get_root_vnode().
+ */
+static spinlock_t s_mount_lock = SPINLOCK_INIT;
 
 /* ========== RAMFS Implementation ========== */
 
@@ -82,11 +96,15 @@ int fs_register(struct filesystem *fs) {
     if (!fs || !fs->ops) {
         return -1;
     }
-    
+
+    uint64_t flags;
+    spin_lock_irqsave(&s_fs_list_lock, &flags);
+
     /* Check for duplicate */
     struct filesystem *cur = registered_fs;
     while (cur) {
         if (strcmp(cur->name, fs->name) == 0) {
+            spin_unlock_irqrestore(&s_fs_list_lock, &flags);
             uart_puts("[MOUNT] Filesystem already registered: ");
             uart_puts(fs->name);
             uart_puts("\n");
@@ -94,26 +112,32 @@ int fs_register(struct filesystem *fs) {
         }
         cur = cur->next;
     }
-    
+
     /* Add to list */
     fs->next = registered_fs;
     registered_fs = fs;
-    
+
+    spin_unlock_irqrestore(&s_fs_list_lock, &flags);
+
     uart_puts("[MOUNT] Registered filesystem: ");
     uart_puts(fs->name);
     uart_puts("\n");
-    
+
     return 0;
 }
 
 struct filesystem *fs_find(const char *name) {
+    uint64_t flags;
+    spin_lock_irqsave(&s_fs_list_lock, &flags);
     struct filesystem *fs = registered_fs;
     while (fs) {
         if (strcmp(fs->name, name) == 0) {
+            spin_unlock_irqrestore(&s_fs_list_lock, &flags);
             return fs;
         }
         fs = fs->next;
     }
+    spin_unlock_irqrestore(&s_fs_list_lock, &flags);
     return NULL;
 }
 
@@ -129,13 +153,13 @@ void mount_init(void) {
     uart_puts("[MOUNT] Mount subsystem initialized\n");
 }
 
-int do_mount(const char *path, const char *fs_name, 
+int do_mount(const char *path, const char *fs_name,
              struct block_device *dev, int flags) {
     if (!path || !fs_name) {
         return -1;
     }
-    
-    /* Find filesystem type */
+
+    /* Find filesystem type — fs_find acquires s_fs_list_lock internally */
     struct filesystem *fs = fs_find(fs_name);
     if (!fs) {
         uart_puts("[MOUNT] Unknown filesystem: ");
@@ -143,33 +167,8 @@ int do_mount(const char *path, const char *fs_name,
         uart_puts("\n");
         return -1;
     }
-    
-    /* Find free mount entry */
-    int slot = -1;
-    for (int i = 0; i < MAX_MOUNTS; i++) {
-        if (!mounts.entries[i].in_use) {
-            slot = i;
-            break;
-        }
-    }
-    
-    if (slot < 0) {
-        uart_puts("[MOUNT] Mount table full\n");
-        return -1;
-    }
-    
-    /* Check for duplicate mount point */
-    for (int i = 0; i < MAX_MOUNTS; i++) {
-        if (mounts.entries[i].in_use && 
-            strcmp(mounts.entries[i].path, path) == 0) {
-            uart_puts("[MOUNT] Path already mounted: ");
-            uart_puts(path);
-            uart_puts("\n");
-            return -1;
-        }
-    }
-    
-    /* Mount the filesystem */
+
+    /* Mount the filesystem outside the lock (may allocate) */
     struct vnode *root = fs->ops->mount(dev, flags);
     if (!root) {
         uart_puts("[MOUNT] Failed to mount ");
@@ -179,69 +178,114 @@ int do_mount(const char *path, const char *fs_name,
         uart_puts("\n");
         return -1;
     }
-    
+
+    uint64_t lk_flags;
+    spin_lock_irqsave(&s_mount_lock, &lk_flags);
+
+    /* Find free mount entry */
+    int slot = -1;
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts.entries[i].in_use) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0) {
+        spin_unlock_irqrestore(&s_mount_lock, &lk_flags);
+        uart_puts("[MOUNT] Mount table full\n");
+        if (fs->ops->unmount) fs->ops->unmount(root);
+        return -1;
+    }
+
+    /* Check for duplicate mount point */
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (mounts.entries[i].in_use &&
+            strcmp(mounts.entries[i].path, path) == 0) {
+            spin_unlock_irqrestore(&s_mount_lock, &lk_flags);
+            uart_puts("[MOUNT] Path already mounted: ");
+            uart_puts(path);
+            uart_puts("\n");
+            if (fs->ops->unmount) fs->ops->unmount(root);
+            return -1;
+        }
+    }
+
     /* Fill mount entry */
     struct mount_entry *entry = &mounts.entries[slot];
     memset(entry->path, 0, MAX_PATH);
     size_t path_len = strlen(path);
     if (path_len >= MAX_PATH) path_len = MAX_PATH - 1;
     memcpy(entry->path, path, path_len);
-    
+
     entry->root = root;
     entry->device = dev;
     entry->fs = fs;
     entry->flags = flags;
     entry->in_use = 1;
     mounts.count++;
-    
+
     /* If mounting root, save it */
     if (strcmp(path, "/") == 0) {
         mounts.root = root;
     }
-    
+
+    spin_unlock_irqrestore(&s_mount_lock, &lk_flags);
+
     uart_puts("[MOUNT] Mounted ");
     uart_puts(fs_name);
     uart_puts(" at ");
     uart_puts(path);
     uart_puts("\n");
-    
+
     return 0;
 }
 
 int do_unmount(const char *path) {
     if (!path) return -1;
-    
+
+    uint64_t flags;
+    spin_lock_irqsave(&s_mount_lock, &flags);
+
     /* Find mount entry */
     for (int i = 0; i < MAX_MOUNTS; i++) {
         if (mounts.entries[i].in_use &&
             strcmp(mounts.entries[i].path, path) == 0) {
-            
+
             struct mount_entry *entry = &mounts.entries[i];
-            
+
             /* Cannot unmount root */
             if (strcmp(path, "/") == 0) {
+                spin_unlock_irqrestore(&s_mount_lock, &flags);
                 uart_puts("[MOUNT] Cannot unmount root filesystem\n");
                 return -1;
             }
-            
-            /* Call filesystem unmount */
-            if (entry->fs && entry->fs->ops && entry->fs->ops->unmount) {
-                entry->fs->ops->unmount(entry->root);
-            }
-            
-            /* Clear entry */
+
+            /* Grab what we need before clearing the entry */
+            struct filesystem *fs   = entry->fs;
+            struct vnode     *root  = entry->root;
+
+            /* Clear entry while holding the lock */
             entry->in_use = 0;
-            entry->root = NULL;
+            entry->root   = NULL;
             mounts.count--;
-            
+
+            spin_unlock_irqrestore(&s_mount_lock, &flags);
+
+            /* Call filesystem unmount outside the lock */
+            if (fs && fs->ops && fs->ops->unmount) {
+                fs->ops->unmount(root);
+            }
+
             uart_puts("[MOUNT] Unmounted ");
             uart_puts(path);
             uart_puts("\n");
-            
+
             return 0;
         }
     }
-    
+
+    spin_unlock_irqrestore(&s_mount_lock, &flags);
     uart_puts("[MOUNT] Not mounted: ");
     uart_puts(path);
     uart_puts("\n");
@@ -250,17 +294,20 @@ int do_unmount(const char *path) {
 
 struct mount_entry *mount_lookup(const char *path) {
     if (!path) return NULL;
-    
+
     struct mount_entry *best = NULL;
     size_t best_len = 0;
-    
+
+    uint64_t flags;
+    spin_lock_irqsave(&s_mount_lock, &flags);
+
     /* Find longest matching mount point */
     for (int i = 0; i < MAX_MOUNTS; i++) {
         if (!mounts.entries[i].in_use) continue;
-        
+
         const char *mp = mounts.entries[i].path;
         size_t mp_len = strlen(mp);
-        
+
         /* Check if path starts with mount point */
         int match = 1;
         for (size_t j = 0; j < mp_len; j++) {
@@ -269,7 +316,7 @@ struct mount_entry *mount_lookup(const char *path) {
                 break;
             }
         }
-        
+
         /* Root always matches, others need path separator or exact match */
         if (match) {
             if (mp_len == 1 && mp[0] == '/') {
@@ -286,12 +333,17 @@ struct mount_entry *mount_lookup(const char *path) {
             }
         }
     }
-    
+
+    spin_unlock_irqrestore(&s_mount_lock, &flags);
     return best;
 }
 
 struct vnode *get_root_vnode(void) {
-    return mounts.root;
+    uint64_t flags;
+    spin_lock_irqsave(&s_mount_lock, &flags);
+    struct vnode *root = mounts.root;
+    spin_unlock_irqrestore(&s_mount_lock, &flags);
+    return root;
 }
 
 /* ========== Boot Filesystem Initialization ========== */

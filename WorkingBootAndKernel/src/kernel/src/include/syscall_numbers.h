@@ -44,3 +44,8 @@
 #define SYS_TCSETPGRP  35   /* set foreground group for session */
 #define SYS_TCGETPGRP  36   /* get foreground group for session */
 #define SYS_RUN_JOB_CONTROL_DEMO 37
+
+/* Filesystem metadata mutation syscalls */
+#define SYS_UNLINK  38  /* arg1=parent_path, arg2=name */
+#define SYS_RENAME  39  /* arg1=old_path,    arg2=new_path */
+#define SYS_CHMOD   40  /* arg1=path,        arg2=mode */

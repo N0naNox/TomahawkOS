@@ -229,6 +229,11 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	/* Copy parsed init.conf into VFS so ls/cat can see it */
 	init_config_create_vfs_copy();
 
+	/* --- TEMPORARY: Auto-run locking tests at boot for verification ---
+	 * Delete this block once all tests pass. */
+	run_kernel_tests();
+	/* ----------------------------------------------------------------- */
+
 	/* Print mount table for debugging */
 	mount_print_table();
 
