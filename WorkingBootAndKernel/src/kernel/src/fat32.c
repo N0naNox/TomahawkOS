@@ -263,7 +263,20 @@ int fat32_free_chain(struct fat32_mount *mnt, uint32_t start) {
 int fat32_read_cluster(struct fat32_mount *mnt, uint32_t cluster, void *buf) {
     if (cluster < FAT32_FIRST_DATA_CLUSTER) return -1;
     uint64_t offset = FAT32_CLUSTER_TO_OFFSET(mnt, cluster);
-    return fat32_read_bytes(mnt, offset, buf, mnt->cluster_size);
+    uart_puts("[FAT32] read_cluster: cluster=");
+    uart_putu(cluster);
+    uart_puts(" byte_offset=0x");
+    uart_puthex(offset);
+    uart_puts(" size=");
+    uart_putu(mnt->cluster_size);
+    uart_puts("\n");
+    int rc = fat32_read_bytes(mnt, offset, buf, mnt->cluster_size);
+    if (rc != 0) {
+        uart_puts("[FAT32] read_cluster: FAILED rc=");
+        uart_putu((uint64_t)(int64_t)rc);
+        uart_puts("\n");
+    }
+    return rc;
 }
 
 /**
@@ -568,16 +581,24 @@ static int fat32_name_cmp_ci(const char *a, const char *b) {
 
 /**
  * Convert an 8.3 short name from disk format to a human-readable string.
- * E.g., "HELLO   TXT" -> "HELLO.TXT"
+ * Honors the DIR_NTRes case flags (Microsoft extension):
+ *   bit 3 (0x08) = name part is lowercase
+ *   bit 4 (0x10) = extension part is lowercase
+ * E.g., "HELLO   TXT" with nt_res=0x18 -> "hello.txt"
  */
-static void fat32_shortname_to_str(const uint8_t *raw, char *out) {
+static void fat32_shortname_to_str(const uint8_t *raw, char *out,
+                                    uint8_t nt_res) {
     int pos = 0;
+    int name_lower = (nt_res & 0x08);  /* bit 3: name lowercase */
+    int ext_lower  = (nt_res & 0x10);  /* bit 4: ext lowercase  */
 
     /* Copy name part (first 8 bytes), trimming trailing spaces */
     int name_end = 7;
     while (name_end >= 0 && raw[name_end] == ' ') name_end--;
     for (int i = 0; i <= name_end; i++) {
-        out[pos++] = (char)raw[i];
+        char c = (char)raw[i];
+        if (name_lower && c >= 'A' && c <= 'Z') c += 32;
+        out[pos++] = c;
     }
 
     /* Copy extension (bytes 8-10), if present */
@@ -586,7 +607,9 @@ static void fat32_shortname_to_str(const uint8_t *raw, char *out) {
     if (ext_end >= 8) {
         out[pos++] = '.';
         for (int i = 8; i <= ext_end; i++) {
-            out[pos++] = (char)raw[i];
+            char c = (char)raw[i];
+            if (ext_lower && c >= 'A' && c <= 'Z') c += 32;
+            out[pos++] = c;
         }
     }
 
@@ -649,7 +672,18 @@ typedef int (*fat32_dir_callback)(const char *name,
 static int fat32_iterate_dir(struct fat32_mount *mnt, uint32_t start_cluster,
                               fat32_dir_callback callback, void *ctx) {
     uint8_t *cluster_buf = (uint8_t *)pfa_alloc_frame();
-    if (!cluster_buf) return -1;
+    if (!cluster_buf) {
+        uart_puts("[FAT32] iterate_dir: pfa_alloc_frame failed!\n");
+        return -1;
+    }
+
+    uart_puts("[FAT32] iterate_dir: start_cluster=");
+    uart_putu(start_cluster);
+    uart_puts(" cluster_size=");
+    uart_putu(mnt->cluster_size);
+    uart_puts(" buf=0x");
+    uart_puthex((uintptr_t)cluster_buf);
+    uart_puts("\n");
 
     /* We may need more than one page for large clusters */
     /* For now, support clusters up to 4096 bytes (1 page).
@@ -664,12 +698,30 @@ static int fat32_iterate_dir(struct fat32_mount *mnt, uint32_t start_cluster,
 
     uint32_t cluster = start_cluster;
     uint32_t cluster_idx = 0;
+    int total_entries_seen = 0;
     while (cluster >= FAT32_FIRST_DATA_CLUSTER && !FAT32_IS_EOC(cluster)) {
+        uart_puts("[FAT32] iterate_dir: reading cluster ");
+        uart_putu(cluster);
+        uart_puts(" (idx=");
+        uart_putu(cluster_idx);
+        uart_puts(")\n");
+
         /* Read this cluster */
         if (fat32_read_cluster(mnt, cluster, cluster_buf) != 0) {
+            uart_puts("[FAT32] iterate_dir: fat32_read_cluster FAILED for cluster ");
+            uart_putu(cluster);
+            uart_puts("\n");
             pfa_free_frame((uintptr_t)cluster_buf);
             return -1;
         }
+
+        /* Dump first 32 bytes of cluster for debugging */
+        uart_puts("[FAT32] iterate_dir: first 32 bytes: ");
+        for (int dbg = 0; dbg < 32; dbg++) {
+            uart_puthex(cluster_buf[dbg]);
+            uart_puts(" ");
+        }
+        uart_puts("\n");
 
         uint32_t entries_per_cluster = mnt->cluster_size / FAT32_DIRENT_SIZE;
         for (uint32_t i = 0; i < entries_per_cluster; i++) {
@@ -678,6 +730,13 @@ static int fat32_iterate_dir(struct fat32_mount *mnt, uint32_t start_cluster,
 
             /* End of directory? */
             if (FAT32_IS_DIRENT_END(de)) {
+                uart_puts("[FAT32] iterate_dir: hit end-of-dir at entry ");
+                uart_putu(i);
+                uart_puts(" (total seen=");
+                uart_putu(total_entries_seen);
+                uart_puts("), first byte=0x");
+                uart_puthex(de->DIR_Name[0]);
+                uart_puts("\n");
                 pfa_free_frame((uintptr_t)cluster_buf);
                 return 0;
             }
@@ -687,6 +746,8 @@ static int fat32_iterate_dir(struct fat32_mount *mnt, uint32_t start_cluster,
                 lfn_active = 0;
                 continue;
             }
+
+            total_entries_seen++;
 
             /* LFN entry */
             if (FAT32_IS_LFN(de)) {
@@ -725,10 +786,10 @@ static int fat32_iterate_dir(struct fat32_mount *mnt, uint32_t start_cluster,
                     name[len] = '\0';
                 } else {
                     /* Checksum mismatch, fall back to short name */
-                    fat32_shortname_to_str(de->DIR_Name, name);
+                    fat32_shortname_to_str(de->DIR_Name, name, de->DIR_NTRes);
                 }
             } else {
-                fat32_shortname_to_str(de->DIR_Name, name);
+                fat32_shortname_to_str(de->DIR_Name, name, de->DIR_NTRes);
             }
 
             lfn_active = 0;
@@ -744,8 +805,20 @@ static int fat32_iterate_dir(struct fat32_mount *mnt, uint32_t start_cluster,
 
         /* Next cluster in the chain */
         cluster_idx++;
-        cluster = fat32_fat_read(mnt, cluster);
+        uint32_t next_cluster = fat32_fat_read(mnt, cluster);
+        uart_puts("[FAT32] iterate_dir: next cluster in chain: ");
+        uart_putu(next_cluster);
+        uart_puts(" (0x");
+        uart_puthex(next_cluster);
+        uart_puts(")\n");
+        cluster = next_cluster;
     }
+
+    uart_puts("[FAT32] iterate_dir: loop exited, cluster=0x");
+    uart_puthex(cluster);
+    uart_puts(" total_entries_seen=");
+    uart_putu(total_entries_seen);
+    uart_puts("\n");
 
     pfa_free_frame((uintptr_t)cluster_buf);
     return 0;
@@ -880,7 +953,22 @@ static int fat32_vop_lookup(struct vnode *dir, const char *name,
         .found = 0,
     };
 
-    fat32_iterate_dir(mnt, fvd->start_cluster, lookup_callback, &ctx);
+    int iter_rc = fat32_iterate_dir(mnt, fvd->start_cluster, lookup_callback, &ctx);
+
+    if (iter_rc < 0) {
+        uart_puts("[FAT32] lookup: iterate_dir failed for '");
+        uart_puts(name);
+        uart_puts("'\n");
+        return -1;
+    }
+
+    if (!ctx.found) {
+        uart_puts("[FAT32] lookup: '");
+        uart_puts(name);
+        uart_puts("' not found in dir cluster ");
+        uart_putu(fvd->start_cluster);
+        uart_puts("\n");
+    }
 
     return ctx.found ? 0 : -2;  /* -2 = not found (ENOENT) */
 }
@@ -937,7 +1025,12 @@ static int fat32_vop_readdir(struct vnode *dir, struct vfs_dirent *dent,
         .found = 0,
     };
 
-    fat32_iterate_dir(mnt, fvd->start_cluster, readdir_callback, &ctx);
+    int iter_rc = fat32_iterate_dir(mnt, fvd->start_cluster, readdir_callback, &ctx);
+
+    if (iter_rc < 0) {
+        uart_puts("[FAT32] readdir: iterate_dir failed\n");
+        return -1;
+    }
 
     if (ctx.found) return 0;
     return 1;  /* No more entries */
@@ -1024,6 +1117,45 @@ static void fat32_str_to_shortname(const char *name, uint8_t *out) {
             out[8 + e++] = (uint8_t)c;
         }
     }
+}
+
+/**
+ * Compute the DIR_NTRes case flags for an 8.3-compatible filename.
+ *   bit 3 (0x08): name part was all lowercase
+ *   bit 4 (0x10): extension part was all lowercase
+ * Returns 0 if the name has mixed case (would need LFN).
+ */
+static uint8_t fat32_compute_nt_res(const char *name) {
+    uint8_t flags = 0;
+
+    /* Split at last dot */
+    const char *dot = NULL;
+    for (const char *p = name; *p; p++) {
+        if (*p == '.') dot = p;
+    }
+
+    /* Check name part case */
+    int has_upper = 0, has_lower = 0;
+    for (const char *p = name; *p && p != dot; p++) {
+        if (*p >= 'A' && *p <= 'Z') has_upper = 1;
+        if (*p >= 'a' && *p <= 'z') has_lower = 1;
+    }
+    /* Pure lowercase name → set bit 3 */
+    if (has_lower && !has_upper) flags |= 0x08;
+
+    /* Check extension part case */
+    if (dot) {
+        has_upper = 0;
+        has_lower = 0;
+        for (const char *p = dot + 1; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') has_upper = 1;
+            if (*p >= 'a' && *p <= 'z') has_lower = 1;
+        }
+        /* Pure lowercase extension → set bit 4 */
+        if (has_lower && !has_upper) flags |= 0x10;
+    }
+
+    return flags;
 }
 
 /* ========== Free Directory Entry Finder ========== */
@@ -1213,6 +1345,9 @@ static int fat32_vop_write_at(struct vnode *vp, const void *buf, size_t nbyte,
     /* Persist size + cluster to the on-disk directory entry */
     fat32_update_dirent(mnt, fvd);
 
+    /* Flush all dirty buffers to disk so changes survive reboot */
+    buffer_sync_all(mnt->dev);
+
     return (int)bytes_written;
 }
 
@@ -1246,11 +1381,15 @@ static int fat32_vop_create(struct vnode *dir, const char *name,
         return -1;
     }
 
+    /* Compute NTRes case flags from the original name */
+    uint8_t nt_res = fat32_compute_nt_res(name);
+
     /* Build a fresh directory entry (zero-length file, no cluster yet) */
     struct fat32_dirent new_de;
     memset(&new_de, 0, sizeof(new_de));
     memcpy(new_de.DIR_Name, short_name, 11);
     new_de.DIR_Attr      = FAT32_ATTR_ARCHIVE;
+    new_de.DIR_NTRes     = nt_res;
     new_de.DIR_FileSize  = 0;
     new_de.DIR_FstClusHI = 0;
     new_de.DIR_FstClusLO = 0;
@@ -1296,6 +1435,9 @@ static int fat32_vop_create(struct vnode *dir, const char *name,
     uart_puts("[FAT32] Created file '");
     uart_puts(name);
     uart_puts("'\n");
+
+    /* Flush all dirty buffers to disk so changes survive reboot */
+    buffer_sync_all(mnt->dev);
 
     *result = vp;
     return 0;
@@ -1412,11 +1554,13 @@ static int fat32_vop_mkdir(struct vnode *dir, const char *name,
     /* Build the directory entry for the parent listing */
     uint8_t short_name[11];
     fat32_str_to_shortname(name, short_name);
+    uint8_t nt_res = fat32_compute_nt_res(name);
 
     struct fat32_dirent new_de;
     memset(&new_de, 0, sizeof(new_de));
     memcpy(new_de.DIR_Name, short_name, 11);
     new_de.DIR_Attr      = FAT32_ATTR_DIRECTORY;
+    new_de.DIR_NTRes     = nt_res;
     new_de.DIR_FileSize  = 0;  /* Directories always have size 0 */
     new_de.DIR_FstClusHI = (uint16_t)(new_clus >> 16);
     new_de.DIR_FstClusLO = (uint16_t)(new_clus & 0xFFFF);
@@ -1439,6 +1583,9 @@ static int fat32_vop_mkdir(struct vnode *dir, const char *name,
     uart_puts("[FAT32] Created directory '");
     uart_puts(name);
     uart_puts("'\n");
+
+    /* Flush all dirty buffers to disk so changes survive reboot */
+    buffer_sync_all(mnt->dev);
 
     *result = vp;
     return 0;
@@ -1571,6 +1718,9 @@ static int fat32_vop_remove(struct vnode *dir, const char *name) {
     uart_puts("[FAT32] Removed '");
     uart_puts(name);
     uart_puts("'\n");
+
+    /* Flush all dirty buffers to disk so changes survive reboot */
+    buffer_sync_all(mnt->dev);
 
     return 0;
 }
