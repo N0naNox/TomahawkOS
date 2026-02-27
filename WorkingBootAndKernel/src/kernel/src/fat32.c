@@ -880,7 +880,22 @@ static int fat32_vop_lookup(struct vnode *dir, const char *name,
         .found = 0,
     };
 
-    fat32_iterate_dir(mnt, fvd->start_cluster, lookup_callback, &ctx);
+    int iter_rc = fat32_iterate_dir(mnt, fvd->start_cluster, lookup_callback, &ctx);
+
+    if (iter_rc < 0) {
+        uart_puts("[FAT32] lookup: iterate_dir failed for '");
+        uart_puts(name);
+        uart_puts("'\n");
+        return -1;
+    }
+
+    if (!ctx.found) {
+        uart_puts("[FAT32] lookup: '");
+        uart_puts(name);
+        uart_puts("' not found in dir cluster ");
+        uart_putu(fvd->start_cluster);
+        uart_puts("\n");
+    }
 
     return ctx.found ? 0 : -2;  /* -2 = not found (ENOENT) */
 }
@@ -937,7 +952,12 @@ static int fat32_vop_readdir(struct vnode *dir, struct vfs_dirent *dent,
         .found = 0,
     };
 
-    fat32_iterate_dir(mnt, fvd->start_cluster, readdir_callback, &ctx);
+    int iter_rc = fat32_iterate_dir(mnt, fvd->start_cluster, readdir_callback, &ctx);
+
+    if (iter_rc < 0) {
+        uart_puts("[FAT32] readdir: iterate_dir failed\n");
+        return -1;
+    }
 
     if (ctx.found) return 0;
     return 1;  /* No more entries */
@@ -1213,6 +1233,9 @@ static int fat32_vop_write_at(struct vnode *vp, const void *buf, size_t nbyte,
     /* Persist size + cluster to the on-disk directory entry */
     fat32_update_dirent(mnt, fvd);
 
+    /* Flush all dirty buffers to disk so changes survive reboot */
+    buffer_sync_all(mnt->dev);
+
     return (int)bytes_written;
 }
 
@@ -1296,6 +1319,9 @@ static int fat32_vop_create(struct vnode *dir, const char *name,
     uart_puts("[FAT32] Created file '");
     uart_puts(name);
     uart_puts("'\n");
+
+    /* Flush all dirty buffers to disk so changes survive reboot */
+    buffer_sync_all(mnt->dev);
 
     *result = vp;
     return 0;
@@ -1440,6 +1466,9 @@ static int fat32_vop_mkdir(struct vnode *dir, const char *name,
     uart_puts(name);
     uart_puts("'\n");
 
+    /* Flush all dirty buffers to disk so changes survive reboot */
+    buffer_sync_all(mnt->dev);
+
     *result = vp;
     return 0;
 }
@@ -1571,6 +1600,9 @@ static int fat32_vop_remove(struct vnode *dir, const char *name) {
     uart_puts("[FAT32] Removed '");
     uart_puts(name);
     uart_puts("'\n");
+
+    /* Flush all dirty buffers to disk so changes survive reboot */
+    buffer_sync_all(mnt->dev);
 
     return 0;
 }

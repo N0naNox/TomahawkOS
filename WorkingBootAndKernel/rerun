@@ -1,13 +1,6 @@
 #!/bin/bash
-# Quick-run: launch QEMU without rebuilding.
-# Use 'bash rerun' for a full clean build + run.
-
-set -e
-
-if [ ! -f ./build/kernel.img ]; then
-    echo "[RUN] No kernel.img found — run 'bash rerun' to do a full build first."
-    exit 1
-fi
+make clean -C src
+make -C src all
 
 # Regenerate FAT32 test image if missing
 if [ ! -f ./build/fat32test.img ]; then
@@ -26,3 +19,5 @@ qemu-system-x86_64 \
 	-net none \
 	-vga std \
 	-device isa-debug-exit,iobase=0xf4,iosize=0x04
+# fallback to legacy target
+# make -C src emu
