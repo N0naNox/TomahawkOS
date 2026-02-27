@@ -20,6 +20,7 @@
 #include "include/arp.h"
 #include "include/udp.h"
 #include "include/loopback.h"
+#include "include/socket.h"
 #include "include/string.h"
 #include <uart.h>
 
@@ -214,6 +215,9 @@ void net_init(void)
 
     /* 4. Loopback interface (lo / 127.0.0.1) */
     loopback_init();
+
+    /* 5. Socket layer */
+    socket_init();
 
     uart_puts("[net] Network stack architecture initialised.\n");
 }
