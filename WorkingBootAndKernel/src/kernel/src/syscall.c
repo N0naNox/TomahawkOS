@@ -334,13 +334,14 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             run_job_control_demo();
             return 0;
 
-        /* ===== Filesystem metadata mutation syscalls ===== */
+        /* ===== Filesystem metadata mutation syscalls (ramfs) ===== */
         case SYS_UNLINK:
             /* arg1 = parent directory path (const char *)
                arg2 = name to remove (const char *) */
             if (arg1 && arg2) {
-                struct vnode *parent = vfs_resolve_path((const char *)arg1);
-                if (!parent) return (uint64_t)-1;
+                struct vnode *parent = NULL;
+                if (vfs_resolve_path((const char *)arg1, &parent) != 0 || !parent)
+                    return (uint64_t)-1;
                 return (uint64_t)vfs_unlink(parent, (const char *)arg2);
             }
             return (uint64_t)-1;
@@ -384,9 +385,11 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                     new_name = new_slash + 1;
                 }
 
-                struct vnode *old_parent = vfs_resolve_path(old_parent_buf);
-                struct vnode *new_parent = vfs_resolve_path(new_parent_buf);
-                if (!old_parent || !new_parent) return (uint64_t)-1;
+                struct vnode *old_parent = NULL, *new_parent = NULL;
+                if (vfs_resolve_path(old_parent_buf, &old_parent) != 0 || !old_parent)
+                    return (uint64_t)-1;
+                if (vfs_resolve_path(new_parent_buf, &new_parent) != 0 || !new_parent)
+                    return (uint64_t)-1;
                 return (uint64_t)vfs_rename(old_parent, old_name, new_parent, new_name);
             }
             return (uint64_t)-1;
@@ -394,11 +397,60 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
         case SYS_CHMOD:
             /* arg1 = path (const char *), arg2 = mode (uint16_t) */
             if (arg1) {
-                struct vnode *vp = vfs_resolve_path((const char *)arg1);
-                if (!vp) return (uint64_t)-1;
+                struct vnode *vp = NULL;
+                if (vfs_resolve_path((const char *)arg1, &vp) != 0 || !vp)
+                    return (uint64_t)-1;
                 return (uint64_t)vfs_chmod(vp, (uint16_t)arg2);
             }
             return (uint64_t)-1;
+
+        /* ===== FAT32 filesystem syscalls ===== */
+        case SYS_RUN_FAT32_DEMO:
+            /* Run FAT32 filesystem demo from shell */
+            vga_write("\n");
+            run_fat32_demo();
+            return 0;
+
+        case SYS_FAT32_MOUNT:
+            uart_puts("[SYSCALL] SYS_FAT32_MOUNT (50) reached\n");
+            shell_fat32_mount();
+            return 0;
+
+        case SYS_FAT32_UMOUNT:
+            shell_fat32_umount();
+            return 0;
+
+        case SYS_FAT32_LS:
+            shell_fat32_ls();
+            return 0;
+
+        case SYS_FAT32_CAT:
+            shell_fat32_cat();
+            return 0;
+
+        case SYS_FAT32_WRITE:
+            shell_fat32_write();
+            return 0;
+
+        case SYS_FAT32_MKDIR:
+            shell_fat32_mkdir();
+            return 0;
+
+        case SYS_FAT32_RM:
+            shell_fat32_rm();
+            return 0;
+
+        case SYS_FAT32_CD:
+            shell_fat32_cd();
+            return 0;
+
+        case SYS_FAT32_RENAME:
+            shell_fat32_rename();
+            return 0;
+
+        case SYS_FAT32_CHMOD:
+            shell_fat32_chmod();
+            return 0;
 
         case 99:
             /* Exit from usermode password demo - return to kernel */
@@ -425,7 +477,9 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         default:
-            uart_puts("[KERNEL] Unknown syscall\n");
+            uart_puts("[KERNEL] Unknown syscall: ");
+            uart_putu(syscall_num);
+            uart_puts("\n");
             return (uint64_t)-1;
     }
 }

@@ -1,11 +1,19 @@
 #!/bin/bash
 make clean -C src
 make -C src all
+
+# Regenerate FAT32 test image if missing
+if [ ! -f ./build/fat32test.img ]; then
+    echo "[RUN] fat32test.img missing, regenerating..."
+    sudo bash create_fat32_test.sh
+fi
+
 qemu-system-x86_64 \
 	-no-reboot -no-shutdown \
 	-bios OVMF.fd \
 	-drive if=none,id=uas-disk1,file=./build/kernel.img,format=raw \
 	-device usb-storage,drive=uas-disk1 \
+	-drive file=./build/fat32test.img,format=raw,if=ide,index=0,media=disk \
 	-serial stdio \
 	-usb \
 	-net none \

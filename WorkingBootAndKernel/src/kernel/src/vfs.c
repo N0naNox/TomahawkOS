@@ -15,6 +15,7 @@
 #include "include/uart.h"
 #include "include/spinlock.h"
 #include "include/proc.h"
+#include "include/mount.h"
 #include <stddef.h>
 
 /* Root vnode */
@@ -44,15 +45,23 @@ static spinlock_t s_alloc_lock = SPINLOCK_INIT;
 static int ramfs_open(struct vnode *vp);
 static int ramfs_read(struct vnode *vp, void *buf, size_t nbyte);
 static int ramfs_write(struct vnode *vp, void *buf, size_t nbyte);
+static int ramfs_vop_lookup(struct vnode *dir, const char *name, struct vnode **result);
+static int ramfs_vop_mkdir(struct vnode *dir, const char *name, struct vnode **result);
+static int ramfs_vop_create(struct vnode *dir, const char *name, struct vnode **result);
+static int ramfs_vop_remove(struct vnode *dir, const char *name);
 
 /* Forward declaration for permission helper (defined at end of file) */
 int vfs_check_perm_as(struct vnode *vp, int how, uint32_t uid, uint32_t gid);
 int vfs_check_perm(struct vnode *vp, int how);
 
 static struct vnode_ops ramfs_ops = {
-    .vop_open = ramfs_open,
-    .vop_read = ramfs_read,
-    .vop_write = ramfs_write,
+    .vop_open   = ramfs_open,
+    .vop_read   = ramfs_read,
+    .vop_write  = ramfs_write,
+    .vop_lookup = ramfs_vop_lookup,
+    .vop_mkdir  = ramfs_vop_mkdir,
+    .vop_create = ramfs_vop_create,
+    .vop_remove = ramfs_vop_remove,
 };
 
 /* ========== Block Allocation ========== */
@@ -206,14 +215,14 @@ struct vnode* vfs_get_root(void) {
     return root;
 }
 
-int vfs_open(struct vnode* vp) {
+int vfs_open(struct vnode *vp) {
     if (!vp || !vp->v_op || !vp->v_op->vop_open) {
         return -1;
     }
     return vp->v_op->vop_open(vp);
 }
 
-int vfs_read(struct vnode* vp, void* buf, size_t nbyte) {
+int vfs_read(struct vnode *vp, void *buf, size_t nbyte) {
     if (!vp || !vp->v_op || !vp->v_op->vop_read) {
         return -1;
     }
@@ -224,7 +233,7 @@ int vfs_read(struct vnode* vp, void* buf, size_t nbyte) {
     return vp->v_op->vop_read(vp, buf, nbyte);
 }
 
-int vfs_write(struct vnode* vp, const void* buf, size_t nbyte) {
+int vfs_write(struct vnode *vp, const void *buf, size_t nbyte) {
     if (!vp || !vp->v_op || !vp->v_op->vop_write) {
         return -1;
     }
@@ -232,13 +241,39 @@ int vfs_write(struct vnode* vp, const void* buf, size_t nbyte) {
         uart_puts("[VFS] write permission denied\n");
         return -1;
     }
-    return vp->v_op->vop_write(vp, (void*)buf, nbyte);
+    return vp->v_op->vop_write(vp, (void *)buf, nbyte);
 }
 
-int vfs_close(struct vnode* vp) {
+int vfs_read_at(struct vnode *vp, void *buf, size_t nbyte, uint64_t offset) {
+    if (!vp || !vp->v_op || !vp->v_op->vop_read_at) {
+        return -1;
+    }
+    return vp->v_op->vop_read_at(vp, buf, nbyte, offset);
+}
+
+int vfs_write_at(struct vnode *vp, const void *buf, size_t nbyte, uint64_t offset) {
+    if (!vp || !vp->v_op || !vp->v_op->vop_write_at) {
+        return -1;
+    }
+    return vp->v_op->vop_write_at(vp, buf, nbyte, offset);
+}
+
+int64_t vfs_getsize(struct vnode *vp) {
+    if (!vp || !vp->v_op || !vp->v_op->vop_getsize) {
+        return -1;
+    }
+    return vp->v_op->vop_getsize(vp);
+}
+
+int vfs_close(struct vnode *vp) {
     if (!vp) return -1;
 
-    struct inode* ip = (struct inode*)vp->v_data;
+    /* Call FS-specific close if provided */
+    if (vp->v_op && vp->v_op->vop_close) {
+        vp->v_op->vop_close(vp);
+    }
+
+    struct inode *ip = (struct inode *)vp->v_data;
     if (ip) {
         /* Sync any dirty blocks to device */
         if (ip->i_bdev && ip->i_blocks > 0) {
@@ -255,6 +290,154 @@ int vfs_close(struct vnode* vp) {
         }
     }
     return 0;
+}
+
+/* ========== Directory Operation Wrappers ========== */
+
+int vfs_lookup(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_lookup) return -1;
+    return dir->v_op->vop_lookup(dir, name, result);
+}
+
+int vfs_readdir(struct vnode *dir, struct vfs_dirent *dent, uint64_t *offset) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_readdir) return -1;
+    return dir->v_op->vop_readdir(dir, dent, offset);
+}
+
+int vfs_create(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_create) return -1;
+    return dir->v_op->vop_create(dir, name, result);
+}
+
+int vfs_mkdir(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_mkdir) return -1;
+    return dir->v_op->vop_mkdir(dir, name, result);
+}
+
+int vfs_remove(struct vnode *dir, const char *name) {
+    if (!dir || dir->v_type != VDIR) return -1;
+    if (!dir->v_op || !dir->v_op->vop_remove) return -1;
+    return dir->v_op->vop_remove(dir, name);
+}
+
+/* ========== Path Resolution ========== */
+
+/**
+ * Internal helper: given a starting directory vnode and a relative path
+ * (no leading '/'), walk each component with vop_lookup.
+ */
+static int vfs_walk_path(struct vnode *start, const char *relpath,
+                          struct vnode **result) {
+    if (!start || !relpath || !result) return -1;
+
+    struct vnode *cur = start;
+
+    /* Empty relative path means the start node itself */
+    if (relpath[0] == '\0') {
+        *result = cur;
+        return 0;
+    }
+
+    /* Work on a mutable copy of the remaining path */
+    char buf[MAX_PATH];
+    size_t len = strlen(relpath);
+    if (len >= MAX_PATH) return -1;
+    memcpy(buf, relpath, len + 1);
+
+    /* Walk each component */
+    char *p = buf;
+    while (*p) {
+        /* Skip leading slashes */
+        while (*p == '/') p++;
+        if (*p == '\0') break;   /* Trailing slash */
+
+        /* Find end of this component */
+        char *end = p;
+        while (*end && *end != '/') end++;
+
+        /* Null-terminate this component */
+        int more = (*end == '/');
+        *end = '\0';
+
+        /* Current node must be a directory */
+        if (cur->v_type != VDIR) return -2;  /* ENOTDIR */
+
+        /* Lookup */
+        struct vnode *child = NULL;
+        int ret = vfs_lookup(cur, p, &child);
+        if (ret != 0) return ret;  /* ENOENT or other error */
+
+        cur = child;
+        p = more ? end + 1 : end;
+    }
+
+    *result = cur;
+    return 0;
+}
+
+int vfs_resolve_path(const char *path, struct vnode **result) {
+    if (!path || !result || path[0] != '/') return -1;
+
+    /* Find the mount point that covers this path */
+    struct mount_entry *me = mount_lookup(path);
+    if (!me || !me->root) {
+        uart_puts("[VFS] resolve: no mount for path '");
+        uart_puts(path);
+        uart_puts("'\n");
+        return -1;
+    }
+
+    /* Strip the mount prefix to get the relative path within that FS */
+    const char *rel = path + strlen(me->path);
+    /* If mount is "/" the rel already starts right; otherwise skip
+       the leading '/' that remains after stripping "/mnt/fat" from
+       "/mnt/fat/dir/file" -> "/dir/file" -> skip the '/' */
+    while (*rel == '/') rel++;
+
+    return vfs_walk_path(me->root, rel, result);
+}
+
+int vfs_resolve_parent(const char *path, struct vnode **parent,
+                        char *name_out, size_t name_max) {
+    if (!path || !parent || !name_out || name_max == 0 || path[0] != '/') {
+        return -1;
+    }
+
+    /* Find the last '/' to split into parent-path and filename */
+    size_t path_len = strlen(path);
+    /* Ignore any trailing slash */
+    while (path_len > 1 && path[path_len - 1] == '/') path_len--;
+
+    /* Find last separator */
+    size_t last_sep = 0;
+    for (size_t i = 0; i < path_len; i++) {
+        if (path[i] == '/') last_sep = i;
+    }
+
+    /* Extract the final component */
+    const char *name_start = path + last_sep + 1;
+    size_t name_len = path_len - last_sep - 1;
+    if (name_len == 0 || name_len >= name_max) return -1;
+    memcpy(name_out, name_start, name_len);
+    name_out[name_len] = '\0';
+
+    /* Build parent path */
+    char parent_path[MAX_PATH];
+    if (last_sep == 0) {
+        /* Parent is root "/" */
+        parent_path[0] = '/';
+        parent_path[1] = '\0';
+    } else {
+        if (last_sep >= MAX_PATH) return -1;
+        memcpy(parent_path, path, last_sep);
+        parent_path[last_sep] = '\0';
+    }
+
+    return vfs_resolve_path(parent_path, parent);
 }
 
 /* ========== RAMFS Implementation Using Block Device ========== */
@@ -312,9 +495,9 @@ static int ramfs_read(struct vnode *vp, void *buf, size_t nbyte) {
     return (int)to_read;
 }
 
-/* ========== Directory & Path Operations ========== */
+/* ========== Directory & Path Operations (ramfs in-memory) ========== */
 
-struct vnode* vfs_lookup(struct vnode *dir, const char *name) {
+struct vnode* vfs_lookup_ramfs(struct vnode *dir, const char *name) {
     if (!dir || !name || dir->v_type != VDIR) return NULL;
 
     uint64_t flags;
@@ -342,7 +525,7 @@ struct vnode* vfs_lookup(struct vnode *dir, const char *name) {
     return NULL;
 }
 
-struct vnode* vfs_resolve_path(const char *path) {
+struct vnode* vfs_resolve_path_ramfs(const char *path) {
     if (!path || *path == '\0') return NULL;
 
     struct vnode *cur = vfs_get_root();
@@ -378,7 +561,7 @@ struct vnode* vfs_resolve_path(const char *path) {
             continue;
         }
 
-        struct vnode *child = vfs_lookup(cur, component);
+        struct vnode *child = vfs_lookup_ramfs(cur, component);
         if (!child) return NULL;
         cur = child;
     }
@@ -389,17 +572,17 @@ int vfs_add_dirent(struct vnode *dir, const char *name, struct vnode *child) {
     if (!dir || !name || !child) return -1;
     if (dir->v_type != VDIR) return -1;
 
-    /* Check for duplicate — vfs_lookup acquires dir->v_lock internally */
-    if (vfs_lookup(dir, name) != NULL) return -1;
+    /* Check for duplicate — vfs_lookup_ramfs acquires dir->v_lock internally */
+    if (vfs_lookup_ramfs(dir, name) != NULL) return -1;
 
     /* Allocate dir_entry from frame allocator */
     struct dir_entry *de = (struct dir_entry *)pfa_alloc_frame();
     if (!de) return -1;
     memset(de, 0, sizeof(struct dir_entry));
 
-    /* Copy name */
+    /* Copy name (dir_entry uses a fixed 64-byte buffer) */
     int i = 0;
-    for (; name[i] && i < VFS_NAME_MAX - 1; i++) {
+    for (; name[i] && i < 63; i++) {
         de->name[i] = name[i];
     }
     de->name[i] = '\0';
@@ -421,11 +604,11 @@ int vfs_add_dirent(struct vnode *dir, const char *name, struct vnode *child) {
     return 0;
 }
 
-struct vnode* vfs_mkdir(struct vnode *parent, const char *name) {
+struct vnode* vfs_mkdir_ramfs(struct vnode *parent, const char *name) {
     if (!parent || !name || parent->v_type != VDIR) return NULL;
 
     /* Check duplicate */
-    if (vfs_lookup(parent, name) != NULL) return NULL;
+    if (vfs_lookup_ramfs(parent, name) != NULL) return NULL;
 
     struct vnode *dir = vfs_create_vnode(VDIR);
     if (!dir) return NULL;
@@ -441,7 +624,7 @@ struct vnode* vfs_create_file(struct vnode *parent, const char *name) {
     if (!parent || !name || parent->v_type != VDIR) return NULL;
 
     /* Check duplicate */
-    if (vfs_lookup(parent, name) != NULL) return NULL;
+    if (vfs_lookup_ramfs(parent, name) != NULL) return NULL;
 
     struct vnode *file = vfs_create_vnode(VREG);
     if (!file) return NULL;
@@ -451,6 +634,36 @@ struct vnode* vfs_create_file(struct vnode *parent, const char *name) {
         return NULL;
     }
     return file;
+}
+
+/* ---- ramfs vnode_ops wrappers (bridge old ramfs code to new vop interface) ---- */
+
+static int ramfs_vop_lookup(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!result) return -1;
+    struct vnode *vp = vfs_lookup_ramfs(dir, name);
+    if (!vp) return -1;   /* ENOENT */
+    *result = vp;
+    return 0;
+}
+
+static int ramfs_vop_mkdir(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!result) return -1;
+    struct vnode *vp = vfs_mkdir_ramfs(dir, name);
+    if (!vp) return -1;
+    *result = vp;
+    return 0;
+}
+
+static int ramfs_vop_create(struct vnode *dir, const char *name, struct vnode **result) {
+    if (!result) return -1;
+    struct vnode *vp = vfs_create_file(dir, name);
+    if (!vp) return -1;
+    *result = vp;
+    return 0;
+}
+
+static int ramfs_vop_remove(struct vnode *dir, const char *name) {
+    return vfs_unlink(dir, name);
 }
 
 static int ramfs_write(struct vnode *vp, void *buf, size_t nbyte) {

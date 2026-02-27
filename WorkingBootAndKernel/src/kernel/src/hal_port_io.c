@@ -36,3 +36,11 @@ uint32_t hal_inl(uint16_t port) {
 void hal_outl(uint16_t port, uint32_t value) {
     hal_outl_asm(port, value);
 }
+
+void hal_insw(uint16_t port, void *buffer, uint32_t count) {
+    hal_insw_asm(port, buffer, count);
+}
+
+void hal_outsw(uint16_t port, const void *buffer, uint32_t count) {
+    hal_outsw_asm(port, buffer, count);
+}
