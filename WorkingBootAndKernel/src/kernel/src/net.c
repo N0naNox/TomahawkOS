@@ -19,6 +19,7 @@
 #include "include/net_device.h"
 #include "include/arp.h"
 #include "include/udp.h"
+#include "include/loopback.h"
 #include "include/string.h"
 #include <uart.h>
 
@@ -211,7 +212,8 @@ void net_init(void)
     udp_init();
     uart_puts("[net]   UDP layer ready\n");
 
-    /* 4. NIC drivers will be probed separately
-     *    (e.g. e1000_init() scans PCI and calls net_device_register) */
+    /* 4. Loopback interface (lo / 127.0.0.1) */
+    loopback_init();
+
     uart_puts("[net] Network stack architecture initialised.\n");
 }

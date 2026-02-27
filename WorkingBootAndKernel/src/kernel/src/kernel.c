@@ -34,6 +34,7 @@
 #include "include/init_config.h"
 #include "include/tty.h"
 #include "include/net.h"
+#include "include/net_test.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -289,8 +290,11 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	/* Initialize TTY subsystem (console line discipline) */
 	tty_init();
 
-	/* Initialize network stack (netbuf pool, ARP cache, UDP layer) */
+	/* Initialize network stack (netbuf pool, ARP cache, UDP layer, loopback) */
 	net_init();
+
+	/* Run loopback self-test (results printed to serial) */
+	net_test_loopback();
 
 	scheduler_init();
 
