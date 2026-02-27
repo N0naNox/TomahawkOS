@@ -84,7 +84,9 @@ C_SOURCES  :=              \
 	${SRC_DIR}/arp.c \
 	${SRC_DIR}/ipv4.c \
 	${SRC_DIR}/icmp.c \
-	${SRC_DIR}/udp.c
+	${SRC_DIR}/udp.c \
+	${SRC_DIR}/loopback.c \
+	${SRC_DIR}/net_test.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})
