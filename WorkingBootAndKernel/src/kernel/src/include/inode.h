@@ -17,6 +17,8 @@ struct inode {
     uint32_t i_no;          /* Inode number */
     uint32_t i_size;        /* File size in bytes */
     uint16_t i_mode;        /* Type (file/dir) and permissions */
+    uint32_t i_uid;         /* Owning user ID  */
+    uint32_t i_gid;         /* Owning group ID */
     uint32_t i_refcount;    /* Reference count */
     void* i_private;
     struct page_cache_entry* cache_list;  /* Page cache list (legacy) */

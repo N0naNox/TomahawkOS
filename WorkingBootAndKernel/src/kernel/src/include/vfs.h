@@ -116,3 +116,36 @@ int vfs_rename(struct vnode *old_parent, const char *old_name,
  * @return 0 on success, -1 if vp is NULL.
  */
 int vfs_chmod(struct vnode *vp, uint16_t mode);
+
+/* ========== Permission Checking ========== */
+
+/* Bit flags for vfs_check_perm() — mirrors POSIX access(2) */
+#define VFS_R_OK  4   /* test for read permission    */
+#define VFS_W_OK  2   /* test for write permission   */
+#define VFS_X_OK  1   /* test for execute permission */
+
+/**
+ * @brief Check whether the calling process may access a vnode.
+ *
+ * Compares the process UID/GID against the inode owner/group and the
+ * Unix permission bits stored in i_mode.  UID 0 (root) bypasses all
+ * checks and is always granted access.
+ *
+ * @param vp   Vnode to check.
+ * @param how  Bitwise OR of VFS_R_OK, VFS_W_OK, VFS_X_OK.
+ * @return 0 if access is granted, -1 if denied.
+ */
+int vfs_check_perm(struct vnode *vp, int how);
+
+/**
+ * @brief Like vfs_check_perm() but uses explicit credentials instead of the
+ *        current process.  Useful for tests and kernel-internal callers that
+ *        need to check access on behalf of a specific uid/gid.
+ *
+ * @param vp   Vnode to check.
+ * @param how  Bitwise OR of VFS_R_OK, VFS_W_OK, VFS_X_OK.
+ * @param uid  User ID to check against.
+ * @param gid  Group ID to check against.
+ * @return 0 if access is granted, -1 if denied.
+ */
+int vfs_check_perm_as(struct vnode *vp, int how, uint32_t uid, uint32_t gid);
