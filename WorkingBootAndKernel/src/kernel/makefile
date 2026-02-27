@@ -78,7 +78,13 @@ C_SOURCES  :=              \
 	${SRC_DIR}/spinlock.c \
 	${SRC_DIR}/ata.c \
 	${SRC_DIR}/fat32.c \
-	${SRC_DIR}/tty.c
+	${SRC_DIR}/tty.c \
+	${SRC_DIR}/net.c \
+	${SRC_DIR}/ethernet.c \
+	${SRC_DIR}/arp.c \
+	${SRC_DIR}/ipv4.c \
+	${SRC_DIR}/icmp.c \
+	${SRC_DIR}/udp.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})
