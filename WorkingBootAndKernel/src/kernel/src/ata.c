@@ -45,7 +45,10 @@ static void ata_io_delay(uint16_t ctrl_port) {
  * Returns 0 on success (DRQ set), negative on error/timeout.
  */
 static int ata_poll(uint16_t io_base, uint16_t ctrl_port) {
-    (void)ctrl_port;  /* Used only for ata_io_delay in callers */
+    /* Required: read alt-status 4 times after command write for ~400ns delay.
+     * This prevents reading stale status from the primary register. */
+    ata_io_delay(ctrl_port);
+
     /* Wait for BSY to clear */
     for (int i = 0; i < ATA_TIMEOUT; i++) {
         uint8_t status = hal_inb(io_base + ATA_REG_STATUS);
@@ -242,10 +245,14 @@ static int ata_blk_read(struct block_device *dev, uint64_t block_num, void *buff
     uint8_t *dst = (uint8_t *)buffer;
 
     for (int i = 0; i < ATA_SECTORS_PER_BLOCK; i++) {
-        if (ata_read_sector(ata, start_lba + i, dst) != 0) {
+        int rc = -1;
+        for (int retry = 0; retry < 3 && rc != 0; retry++) {
+            rc = ata_read_sector(ata, start_lba + i, dst);
+        }
+        if (rc != 0) {
             uart_puts("[ATA] read error at LBA ");
             uart_putu(start_lba + i);
-            uart_puts("\n");
+            uart_puts(" after 3 retries\n");
             return -1;
         }
         dst += ATA_SECTOR_SIZE;
@@ -259,10 +266,14 @@ static int ata_blk_write(struct block_device *dev, uint64_t block_num, const voi
     const uint8_t *src = (const uint8_t *)buffer;
 
     for (int i = 0; i < ATA_SECTORS_PER_BLOCK; i++) {
-        if (ata_write_sector(ata, start_lba + i, src) != 0) {
+        int rc = -1;
+        for (int retry = 0; retry < 3 && rc != 0; retry++) {
+            rc = ata_write_sector(ata, start_lba + i, src);
+        }
+        if (rc != 0) {
             uart_puts("[ATA] write error at LBA ");
             uart_putu(start_lba + i);
-            uart_puts("\n");
+            uart_puts(" after 3 retries\n");
             return -1;
         }
         src += ATA_SECTOR_SIZE;
