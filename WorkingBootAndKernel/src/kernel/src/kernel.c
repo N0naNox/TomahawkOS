@@ -32,6 +32,7 @@
 #include "include/password_store.h"
 #include "include/mount.h"
 #include "include/init_config.h"
+#include "include/tty.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -283,6 +284,9 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	timer_install();
 
 	keyboard_init();
+
+	/* Initialize TTY subsystem (console line discipline) */
+	tty_init();
 
 	scheduler_init();
 

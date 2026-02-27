@@ -77,7 +77,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/init_config.c \
 	${SRC_DIR}/spinlock.c \
 	${SRC_DIR}/ata.c \
-	${SRC_DIR}/fat32.c
+	${SRC_DIR}/fat32.c \
+	${SRC_DIR}/tty.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})
