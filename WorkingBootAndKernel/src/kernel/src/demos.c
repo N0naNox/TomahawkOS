@@ -1697,6 +1697,17 @@ void run_tomahawk_shell(void) {
     *p++ = 0xE9; uint8_t *jloop5 = p; p += 4;
     *not_logout = (uint8_t)(p - not_logout - 1);
 
+    /* Debug: report page1 code sizes */
+    {
+        size_t p1_used = (size_t)(p - code_ptr);
+        uart_puts("[SHELL] Page1 code size: ");
+        uart_putu(p1_used);
+        uart_puts(" / 4096 bytes\n");
+        if (p1_used > 4090) {
+            uart_puts("[SHELL] WARNING: Page1 nearly full!\n");
+        }
+    }
+
     /* We're running out of space in first page, continue in second page */
     /* Jump to second code page */
     *p++ = 0xE9;
@@ -1961,10 +1972,26 @@ void run_tomahawk_shell(void) {
         not_tests[3] = (off >> 24) & 0xFF;
     }
 
+    /* Debug: report page2 code sizes */
+    {
+        size_t p2_used = (size_t)(p - code2_ptr);
+        uart_puts("[SHELL] Page2 code size: ");
+        uart_putu(p2_used);
+        uart_puts(" / 4096 bytes\n");
+        if (p2_used > 4090) {
+            uart_puts("[SHELL] WARNING: Page2 nearly full!\n");
+        }
+    }
+
     /* Jump from page2 to page3 for remaining commands */
     *p++ = 0xE9;
     {
         int32_t jmp_to_p3 = (int32_t)(SHELL_CODE3 - (SHELL_CODE2 + (p - code2_ptr) + 4));
+        uart_puts("[SHELL] p2→p3 jump: offset in p2=");
+        uart_putu((uint64_t)(p - code2_ptr));
+        uart_puts(", disp=");
+        uart_putu((uint64_t)(uint32_t)jmp_to_p3);
+        uart_puts("\n");
         *p++ = jmp_to_p3 & 0xFF;
         *p++ = (jmp_to_p3 >> 8) & 0xFF;
         *p++ = (jmp_to_p3 >> 16) & 0xFF;
@@ -2099,8 +2126,6 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP(jloop10);
     PATCH_JLOOP(jloop_vfs);
     PATCH_JLOOP(jloop_tests);
-    PATCH_JLOOP(jloop_forkwait);
-    PATCH_JLOOP(jloop_shellcmd);
     
     #undef PATCH_JLOOP
     
@@ -2123,6 +2148,10 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP_P3(jloop_mkdir);
     PATCH_JLOOP_P3(jloop_rm);
     PATCH_JLOOP_P3(jloop_cd);
+    PATCH_JLOOP_P3(jloop_rename);
+    PATCH_JLOOP_P3(jloop_chmod);
+    PATCH_JLOOP_P3(jloop_forkwait);
+    PATCH_JLOOP_P3(jloop_shellcmd);
     
     #undef PATCH_JLOOP_P3
     
@@ -2145,6 +2174,16 @@ void run_tomahawk_shell(void) {
     
     #undef PATCH_JLOOP_P1
     
+    /* Debug: report code sizes */
+    {
+        size_t p3_used = (size_t)(p - code3_ptr);
+        uart_puts("[SHELL] Page3 code size: ");
+        uart_putu(p3_used);
+        uart_puts(" / 4096 bytes\n");
+        if (p3_used > 4096) {
+            uart_puts("[SHELL] ERROR: Page3 code overflow!\n");
+        }
+    }
     uart_puts("[SHELL] Code generated, launching...\n");
     vga_write("Launching Tomahawk Shell in Ring 3...\n\n");
     

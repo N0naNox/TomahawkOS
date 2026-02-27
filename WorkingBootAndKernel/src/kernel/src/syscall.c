@@ -412,6 +412,7 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         case SYS_FAT32_MOUNT:
+            uart_puts("[SYSCALL] SYS_FAT32_MOUNT (50) reached\n");
             shell_fat32_mount();
             return 0;
 
@@ -476,7 +477,9 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         default:
-            uart_puts("[KERNEL] Unknown syscall\n");
+            uart_puts("[KERNEL] Unknown syscall: ");
+            uart_putu(syscall_num);
+            uart_puts("\n");
             return (uint64_t)-1;
     }
 }
