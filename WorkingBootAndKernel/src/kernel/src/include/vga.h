@@ -58,5 +58,17 @@ void vga_get_cursor(int* row, int* col);
 /* Set current text colors (bg and fg are vga_color values) */
 void vga_set_color(uint8_t bg, uint8_t fg);
 
+/* Draw an underline cursor at the current position */
+void vga_draw_cursor(void);
+
+/* Erase the cursor at the current position */
+void vga_erase_cursor(void);
+
+/* Clear a character cell at given row/col (fill with background) */
+void vga_clear_char(int row, int col);
+
+/* Draw a character at specified row/col without moving the VGA cursor */
+void vga_draw_char_at(int row, int col, char c);
+
 #endif /* VGA_H */
 

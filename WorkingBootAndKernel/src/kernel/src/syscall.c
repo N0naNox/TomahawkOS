@@ -31,6 +31,42 @@ extern volatile int usermode_pass_completed;
 /* Shell state - current logged in user ID (-1 = not logged in) */
 static volatile int shell_current_uid = -1;
 
+/* ===== SYS_READLINE helpers ===== */
+
+#define READLINE_HIST_SIZE  8
+#define READLINE_HIST_MAXLEN 128
+
+static char readline_history[READLINE_HIST_SIZE][READLINE_HIST_MAXLEN];
+static int  readline_hist_count = 0;   /* total entries stored so far */
+static int  readline_hist_write = 0;   /* next slot to write                */
+
+/* Redraw characters from position 'from' to end of line, then clear one
+   extra cell (handles deletion cleanly). */
+static void readline_redraw(const char *buf, int len, int from,
+                            int start_row, int start_col)
+{
+    for (int i = from; i <= len; i++) {
+        int screen_pos = start_col + i;
+        int row = start_row + screen_pos / VGA_WIDTH;
+        int col = screen_pos % VGA_WIDTH;
+        if (row >= VGA_HEIGHT) break;
+        if (i < len) {
+            vga_draw_char_at(row, col, buf[i]);
+        } else {
+            vga_clear_char(row, col);          /* erase old trailing char */
+        }
+    }
+}
+
+/* Set the VGA cursor to the position corresponding to buffer offset 'cur'. */
+static void readline_set_vga_cursor(int cur, int start_row, int start_col)
+{
+    int screen_pos = start_col + cur;
+    int row = start_row + screen_pos / VGA_WIDTH;
+    int col = screen_pos % VGA_WIDTH;
+    vga_set_cursor(row, col);
+}
+
 /* Helper to return to kernel from usermode demo */
 static void return_to_kernel_demo(volatile uint64_t* rsp, volatile uint64_t* rbp, 
                                    volatile uint64_t* rip, volatile int* completed) {
@@ -475,6 +511,240 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                 );
             }
             return 0;
+
+        case SYS_READLINE:
+        /* ===== Line editing with cursor & arrow-key support ===== */
+        /* arg1 = buffer pointer,  arg2 = max length (including NUL) */
+        {
+            char *buf = (char *)arg1;
+            int maxlen = (int)arg2;
+            if (!buf || maxlen <= 1) return 0;
+            if (maxlen > READLINE_HIST_MAXLEN) maxlen = READLINE_HIST_MAXLEN;
+
+            int len    = 0;      /* current input length                */
+            int cursor = 0;      /* insertion point (0 .. len)          */
+            int e0     = 0;      /* set after receiving 0xE0 prefix     */
+
+            /* Where the editable area starts on screen */
+            int start_row, start_col;
+            vga_get_cursor(&start_row, &start_col);
+
+            /* Show initial cursor */
+            vga_draw_cursor();
+
+            /* Saved input for history navigation */
+            char saved_line[READLINE_HIST_MAXLEN];
+            int  saved_len = 0;
+            int  hist_browse = -1;   /* -1 = editing current line */
+
+            static const char sc_map[128] = {
+                0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
+                'q','w','e','r','t','y','u','i','o','p','[',']','\n', 0, 'a','s',
+                'd','f','g','h','j','k','l',';','\'','`', 0,'\\','z','x','c','v',
+                'b','n','m',',','.','/', 0, '*', 0, ' ', 0, 0, 0, 0, 0, 0,
+            };
+
+            for (;;) {
+                /* Poll keyboard controller */
+                if (!(hal_inb(0x64) & 0x01)) {
+                    __asm__ volatile("pause");
+                    continue;
+                }
+                uint8_t sc = hal_inb(0x60);
+
+                /* E0 prefix → next byte is an extended key */
+                if (sc == 0xE0) { e0 = 1; continue; }
+
+                /* Ignore break codes (key release) */
+                if (sc & 0x80) { e0 = 0; continue; }
+
+                /* ---------- Extended keys (arrows, Home, End, Delete) ---------- */
+                if (e0) {
+                    e0 = 0;
+                    switch (sc) {
+                    case 0x4B: /* Left arrow */
+                        if (cursor > 0) {
+                            vga_erase_cursor();
+                            cursor--;
+                            readline_set_vga_cursor(cursor, start_row, start_col);
+                            vga_draw_cursor();
+                        }
+                        break;
+
+                    case 0x4D: /* Right arrow */
+                        if (cursor < len) {
+                            vga_erase_cursor();
+                            cursor++;
+                            readline_set_vga_cursor(cursor, start_row, start_col);
+                            vga_draw_cursor();
+                        }
+                        break;
+
+                    case 0x48: /* Up arrow – previous history entry */
+                    {
+                        if (readline_hist_count == 0) break;
+                        if (hist_browse == -1) {
+                            /* Save current input before browsing */
+                            for (int i = 0; i < len; i++) saved_line[i] = buf[i];
+                            saved_line[len] = '\0';
+                            saved_len = len;
+                            hist_browse = 0;
+                        } else if (hist_browse < readline_hist_count - 1) {
+                            hist_browse++;
+                        } else {
+                            break; /* already at oldest */
+                        }
+                        /* Which slot? */
+                        int idx = (readline_hist_write - 1 - hist_browse + READLINE_HIST_SIZE) % READLINE_HIST_SIZE;
+                        /* Copy history entry into buf */
+                        vga_erase_cursor();
+                        /* Clear old characters on screen */
+                        readline_redraw(buf, 0, 0, start_row, start_col);
+                        /* Extra: clear ALL old visible chars */
+                        for (int i = 0; i <= len; i++) {
+                            int sp = start_col + i;
+                            int r = start_row + sp / VGA_WIDTH;
+                            int c2 = sp % VGA_WIDTH;
+                            if (r < VGA_HEIGHT) vga_clear_char(r, c2);
+                        }
+                        len = 0;
+                        for (int i = 0; readline_history[idx][i] && i < maxlen - 1; i++) {
+                            buf[len++] = readline_history[idx][i];
+                        }
+                        buf[len] = '\0';
+                        cursor = len;
+                        readline_redraw(buf, len, 0, start_row, start_col);
+                        readline_set_vga_cursor(cursor, start_row, start_col);
+                        vga_draw_cursor();
+                        break;
+                    }
+
+                    case 0x50: /* Down arrow – next (newer) history entry */
+                    {
+                        if (hist_browse < 0) break;
+                        vga_erase_cursor();
+                        /* Clear old visible chars */
+                        for (int i = 0; i <= len; i++) {
+                            int sp = start_col + i;
+                            int r = start_row + sp / VGA_WIDTH;
+                            int c2 = sp % VGA_WIDTH;
+                            if (r < VGA_HEIGHT) vga_clear_char(r, c2);
+                        }
+                        hist_browse--;
+                        if (hist_browse < 0) {
+                            /* Restore saved current input */
+                            len = saved_len;
+                            for (int i = 0; i < len; i++) buf[i] = saved_line[i];
+                            buf[len] = '\0';
+                        } else {
+                            int idx = (readline_hist_write - 1 - hist_browse + READLINE_HIST_SIZE) % READLINE_HIST_SIZE;
+                            len = 0;
+                            for (int i = 0; readline_history[idx][i] && i < maxlen - 1; i++) {
+                                buf[len++] = readline_history[idx][i];
+                            }
+                            buf[len] = '\0';
+                        }
+                        cursor = len;
+                        readline_redraw(buf, len, 0, start_row, start_col);
+                        readline_set_vga_cursor(cursor, start_row, start_col);
+                        vga_draw_cursor();
+                        break;
+                    }
+
+                    case 0x47: /* Home */
+                        if (cursor != 0) {
+                            vga_erase_cursor();
+                            cursor = 0;
+                            readline_set_vga_cursor(cursor, start_row, start_col);
+                            vga_draw_cursor();
+                        }
+                        break;
+
+                    case 0x4F: /* End */
+                        if (cursor != len) {
+                            vga_erase_cursor();
+                            cursor = len;
+                            readline_set_vga_cursor(cursor, start_row, start_col);
+                            vga_draw_cursor();
+                        }
+                        break;
+
+                    case 0x53: /* Delete – erase char AT cursor (not before) */
+                        if (cursor < len) {
+                            vga_erase_cursor();
+                            for (int i = cursor; i < len - 1; i++) buf[i] = buf[i+1];
+                            len--;
+                            buf[len] = '\0';
+                            readline_redraw(buf, len, cursor, start_row, start_col);
+                            readline_set_vga_cursor(cursor, start_row, start_col);
+                            vga_draw_cursor();
+                        }
+                        break;
+                    }
+                    continue;
+                }
+
+                /* ---------- Normal keys ---------- */
+                char ch = 0;
+                if (sc < sizeof(sc_map)) ch = sc_map[sc];
+                if (!ch) continue;
+
+                /* Enter / Return */
+                if (ch == '\n' || ch == '\r') {
+                    vga_erase_cursor();
+                    buf[len] = '\0';
+                    /* Move VGA cursor to end of input then newline */
+                    readline_set_vga_cursor(len, start_row, start_col);
+                    vga_putc('\n');
+                    /* Store in history (skip empty lines) */
+                    if (len > 0) {
+                        for (int i = 0; i < len && i < READLINE_HIST_MAXLEN - 1; i++)
+                            readline_history[readline_hist_write][i] = buf[i];
+                        readline_history[readline_hist_write][len] = '\0';
+                        readline_hist_write = (readline_hist_write + 1) % READLINE_HIST_SIZE;
+                        if (readline_hist_count < READLINE_HIST_SIZE)
+                            readline_hist_count++;
+                    }
+                    return (uint64_t)len;
+                }
+
+                /* Backspace */
+                if (ch == '\b') {
+                    if (cursor > 0) {
+                        vga_erase_cursor();
+                        for (int i = cursor - 1; i < len - 1; i++) buf[i] = buf[i+1];
+                        len--;
+                        cursor--;
+                        buf[len] = '\0';
+                        readline_redraw(buf, len, cursor, start_row, start_col);
+                        readline_set_vga_cursor(cursor, start_row, start_col);
+                        vga_draw_cursor();
+                    }
+                    continue;
+                }
+
+                /* Tab – ignore for now */
+                if (ch == '\t') continue;
+
+                /* ESC – ignore */
+                if (ch == 27) continue;
+
+                /* Printable character – insert at cursor */
+                if (ch >= 32 && ch < 127 && len < maxlen - 1) {
+                    vga_erase_cursor();
+                    /* Shift everything at cursor rightward */
+                    for (int i = len; i > cursor; i--) buf[i] = buf[i-1];
+                    buf[cursor] = ch;
+                    len++;
+                    cursor++;
+                    buf[len] = '\0';
+                    readline_redraw(buf, len, cursor - 1, start_row, start_col);
+                    readline_set_vga_cursor(cursor, start_row, start_col);
+                    vga_draw_cursor();
+                }
+            }
+            /* not reached */
+        }
 
         default:
             uart_puts("[KERNEL] Unknown syscall: ");

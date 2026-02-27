@@ -1513,55 +1513,13 @@ void run_tomahawk_shell(void) {
     /* read_cmd: */
     *skip_guest = (uint8_t)(p - skip_guest - 1);
     
-    /* Read command line into cmdbuf */
-    p = emit_mov64(p, 13, cmdbuf); /* r13 = buffer */
-    p = emit_mov64(p, 15, cmdbuf); /* r15 = start of buffer (for length calc) */
-    
-    uint8_t *cmd_loop = p;
-    p = emit_syscall_only(p, 14); /* getchar */
-    *p++ = 0x3C; *p++ = 0x0D; /* cmp al, CR */
-    *p++ = 0x74; uint8_t *cmd_done = p; *p++ = 0x00;
-    *p++ = 0x3C; *p++ = 0x0A; /* cmp al, LF */
-    *p++ = 0x74; uint8_t *cmd_done2 = p; *p++ = 0x00;
-    /* Handle backspace */
-    *p++ = 0x3C; *p++ = 0x08; /* cmp al, backspace */
-    *p++ = 0x75; uint8_t *not_bs = p; *p++ = 0x00;
-    /* If at start of buffer, ignore */
-    *p++ = 0x4D; *p++ = 0x39; *p++ = 0xFD; /* cmp r13, r15 */
-    *p++ = 0x74; /* je cmd_loop */
-    int8_t bs_jmp = (int8_t)(cmd_loop - p - 1);
-    *p++ = (uint8_t)bs_jmp;
-    /* dec r13 */
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xCD;
-    /* print backspace, space, backspace to erase */
-    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x08; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
-    p = emit_syscall_only(p, 15);
-    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x20; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
-    p = emit_syscall_only(p, 15);
-    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x08; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
-    p = emit_syscall_only(p, 15);
-    *p++ = 0xEB;
-    int8_t bs_loop = (int8_t)(cmd_loop - p - 1);
-    *p++ = (uint8_t)bs_loop;
-    /* not backspace: */
-    *not_bs = (uint8_t)(p - not_bs - 1);
-    /* store char */
-    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00; /* mov [r13], al */
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5; /* inc r13 */
-    /* echo */
-    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7; /* mov rdi, rax */
-    p = emit_syscall_only(p, 15);
-    /* loop */
-    *p++ = 0xEB;
-    int8_t loop_off = (int8_t)(cmd_loop - p - 1);
-    *p++ = (uint8_t)loop_off;
-    /* cmd_done: */
-    *cmd_done = (uint8_t)(p - cmd_done - 1);
-    *cmd_done2 = (uint8_t)(p - cmd_done2 - 1);
-    /* null terminate */
-    *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
-    /* newline */
-    p = emit_print(p, s_nl, s_nl_len);
+    /* Read command line into cmdbuf using SYS_READLINE (full line editing
+       with cursor movement, arrow keys, and command history). */
+    p = emit_mov64(p, 7, cmdbuf);   /* rdi = buffer pointer */
+    p = emit_mov64(p, 6, 126);      /* rsi = max length     */
+    p = emit_syscall_only(p, 70);   /* SYS_READLINE         */
+    /* rax = length of entered line; buffer is null-terminated.
+       SYS_READLINE already printed the trailing newline.        */
     
     /* ===== COMMAND PARSING ===== */
     /* Compare cmdbuf with each command */

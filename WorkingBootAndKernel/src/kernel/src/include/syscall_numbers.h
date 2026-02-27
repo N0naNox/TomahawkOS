@@ -64,3 +64,6 @@
 
 /* WAITPID */
 #define SYS_WAITPID 60
+
+/* Line editing with cursor support */
+#define SYS_READLINE 70

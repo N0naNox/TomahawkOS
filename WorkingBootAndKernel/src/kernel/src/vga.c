@@ -93,6 +93,14 @@ void vga_putc(char c) {
 		++vga_row;
 	} else if (c == '\r') {
 		vga_col = 0;
+	} else if (c == '\b') {
+		/* Backspace: move cursor left by one if possible */
+		if (vga_col > 0) {
+			--vga_col;
+		} else if (vga_row > 0) {
+			--vga_row;
+			vga_col = VGA_WIDTH - 1;
+		}
 	} else if (c == '\t') {
 		vga_col = (vga_col + 8) & ~(8 - 1);
 		if (vga_col >= VGA_WIDTH) {
@@ -118,5 +126,74 @@ void vga_putc(char c) {
 
 void vga_write(const char* str) {
 	for (const char* p = str; *p; ++p) vga_putc(*p);
+}
+
+/* ===== Cursor rendering ===== */
+
+void vga_draw_cursor(void) {
+	if (!fb_buffer) return;
+	uint32_t x = vga_col * 9;
+	uint32_t y = vga_row * 16;
+	/* Draw an underline cursor: bright white bar on bottom 2 rows of the cell */
+	for (int row = 14; row < 16; row++) {
+		for (int col = 0; col < 8; col++) {
+			uint32_t px = x + col;
+			uint32_t py = y + row;
+			if (px < fb_width && py < fb_height) {
+				fb_buffer[py * fb_pitch + px] = 0xFFFFFFFF; /* White */
+			}
+		}
+	}
+}
+
+void vga_erase_cursor(void) {
+	if (!fb_buffer) return;
+	uint32_t x = vga_col * 9;
+	uint32_t y = vga_row * 16;
+	/* Erase the underline cursor: clear bottom 2 rows of the cell */
+	for (int row = 14; row < 16; row++) {
+		for (int col = 0; col < 8; col++) {
+			uint32_t px = x + col;
+			uint32_t py = y + row;
+			if (px < fb_width && py < fb_height) {
+				fb_buffer[py * fb_pitch + px] = 0x00000000; /* Black */
+			}
+		}
+	}
+}
+
+void vga_clear_char(int row, int col) {
+	if (!fb_buffer) return;
+	uint32_t x = (uint32_t)col * 9;
+	uint32_t y = (uint32_t)row * 16;
+	for (int r = 0; r < 16; r++) {
+		for (int c = 0; c < 9; c++) {
+			uint32_t px = x + c;
+			uint32_t py = y + r;
+			if (px < fb_width && py < fb_height) {
+				fb_buffer[py * fb_pitch + px] = 0x00000000;
+			}
+		}
+	}
+}
+
+void vga_draw_char_at(int row, int col, char c) {
+	if (!fb_buffer) return;
+	uint32_t x = (uint32_t)col * 9;
+	uint32_t y = (uint32_t)row * 16;
+	/* Clear the cell first */
+	for (int r = 0; r < 16; r++) {
+		for (int cc = 0; cc < 9; cc++) {
+			uint32_t px = x + cc;
+			uint32_t py = y + r;
+			if (px < fb_width && py < fb_height) {
+				fb_buffer[py * fb_pitch + px] = 0x00000000;
+			}
+		}
+	}
+	/* Draw the character */
+	if (c >= 32 && c <= 126) {
+		draw_char_8x16(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
+	}
 }
 
