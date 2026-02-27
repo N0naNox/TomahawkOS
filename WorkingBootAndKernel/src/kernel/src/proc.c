@@ -148,6 +148,10 @@ int fork_process(void) {
     child->sid  = parent->sid;
     child->is_stopped = 0;
 
+    /* Inherit credentials */
+    child->uid  = parent->uid;
+    child->gid  = parent->gid;
+
     /* Copy signal handlers (but not pending signals) */
     memcpy(&child->signals, &parent->signals, sizeof(signal_struct_t));
     child->signals.pending = 0;  /* Child starts with no pending signals */

@@ -14,6 +14,7 @@
 #include "include/string.h"
 #include "include/uart.h"
 #include "include/spinlock.h"
+#include "include/proc.h"
 #include <stddef.h>
 
 /* Root vnode */
@@ -43,6 +44,10 @@ static spinlock_t s_alloc_lock = SPINLOCK_INIT;
 static int ramfs_open(struct vnode *vp);
 static int ramfs_read(struct vnode *vp, void *buf, size_t nbyte);
 static int ramfs_write(struct vnode *vp, void *buf, size_t nbyte);
+
+/* Forward declaration for permission helper (defined at end of file) */
+int vfs_check_perm_as(struct vnode *vp, int how, uint32_t uid, uint32_t gid);
+int vfs_check_perm(struct vnode *vp, int how);
 
 static struct vnode_ops ramfs_ops = {
     .vop_open = ramfs_open,
@@ -151,7 +156,21 @@ struct vnode* vfs_create_vnode_on_device(enum vtype type, struct block_device *d
     ip->i_start_block = 0;
     ip->i_blocks = 0;
     ip->i_size = 0;
-    
+
+    /* Default ownership: inherit from creating process (root if no process) */
+    {
+        pcb_t *creator = get_current_process();
+        ip->i_uid = creator ? creator->uid : 0;
+        ip->i_gid = creator ? creator->gid : 0;
+    }
+
+    /* Default permission mode: 0755 for directories, 0644 for regular files */
+    if (type == VDIR) {
+        ip->i_mode = (uint16_t)(0x4000u | 0755u);
+    } else {
+        ip->i_mode = (uint16_t)(0x8000u | 0644u);
+    }
+
     return vp;
 }
 
@@ -198,11 +217,19 @@ int vfs_read(struct vnode* vp, void* buf, size_t nbyte) {
     if (!vp || !vp->v_op || !vp->v_op->vop_read) {
         return -1;
     }
+    if (vfs_check_perm(vp, VFS_R_OK) != 0) {
+        uart_puts("[VFS] read permission denied\n");
+        return -1;
+    }
     return vp->v_op->vop_read(vp, buf, nbyte);
 }
 
 int vfs_write(struct vnode* vp, const void* buf, size_t nbyte) {
     if (!vp || !vp->v_op || !vp->v_op->vop_write) {
+        return -1;
+    }
+    if (vfs_check_perm(vp, VFS_W_OK) != 0) {
+        uart_puts("[VFS] write permission denied\n");
         return -1;
     }
     return vp->v_op->vop_write(vp, (void*)buf, nbyte);
@@ -728,4 +755,50 @@ int vfs_chmod(struct vnode *vp, uint16_t mode)
     spin_unlock_irqrestore(&ip->i_lock, &flags);
 
     return 0;
+}
+
+/* ========== Permission Checking ========== */
+
+int vfs_check_perm_as(struct vnode *vp, int how, uint32_t uid, uint32_t gid)
+{
+    if (!vp) return -1;
+    struct inode *ip = (struct inode *)vp->v_data;
+    if (!ip) return -1;
+
+    /* Snapshot ownership and mode under i_lock */
+    uint64_t flags;
+    spin_lock_irqsave(&ip->i_lock, &flags);
+    uint32_t owner = ip->i_uid;
+    uint32_t group = ip->i_gid;
+    uint16_t mode  = ip->i_mode;
+    spin_unlock_irqrestore(&ip->i_lock, &flags);
+
+    /* Root (UID 0) bypasses all permission checks */
+    if (uid == 0) return 0;
+
+    /* Select the right rwx triplet from the mode bits */
+    int perm_bits;
+    if (uid == owner) {
+        perm_bits = (mode >> 6) & 7;   /* owner  rwx */
+    } else if (gid == group) {
+        perm_bits = (mode >> 3) & 7;   /* group  rwx */
+    } else {
+        perm_bits =  mode       & 7;   /* others rwx */
+    }
+
+    if ((how & VFS_R_OK) && !(perm_bits & 4)) return -1;
+    if ((how & VFS_W_OK) && !(perm_bits & 2)) return -1;
+    if ((how & VFS_X_OK) && !(perm_bits & 1)) return -1;
+
+    return 0;
+}
+
+int vfs_check_perm(struct vnode *vp, int how)
+{
+    /* Caller credentials — default to root if no process is running yet
+     * (e.g. early boot or kernel-internal calls). */
+    pcb_t *proc = get_current_process();
+    uint32_t uid = proc ? proc->uid : 0;
+    uint32_t gid = proc ? proc->gid : 0;
+    return vfs_check_perm_as(vp, how, uid, gid);
 }

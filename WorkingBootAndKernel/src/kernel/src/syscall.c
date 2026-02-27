@@ -207,17 +207,28 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             vga_putc((char)arg1);
             return 0;
 
-        case SYS_GETUID:
-            /* Return current shell user ID (-1 if not logged in) */
-            return (uint64_t)shell_current_uid;
+        case SYS_GETUID: {
+            /* Return UID from the current process PCB */
+            pcb_t *_p = get_current_process();
+            return _p ? (uint64_t)_p->uid : 0;
+        }
 
-        case SYS_SETUID:
-            /* Set current shell user ID (arg1 = uid) */
-            shell_current_uid = (int)arg1;
+        case SYS_SETUID: {
+            /* Only root (UID 0) may set an arbitrary UID.
+             * Non-root processes can only keep their own UID (no-op). */
+            pcb_t *_p = get_current_process();
+            if (!_p) return (uint64_t)-1;
+            if (_p->uid != 0 && _p->uid != (uint32_t)arg1) {
+                uart_puts("[SHELL] SYS_SETUID: permission denied\n");
+                return (uint64_t)-1;  /* EPERM */
+            }
+            _p->uid = (uint32_t)arg1;
+            shell_current_uid = (int)arg1;  /* keep legacy shell var in sync */
             uart_puts("[SHELL] UID set to ");
-            uart_putu(shell_current_uid);
+            uart_putu(_p->uid);
             uart_puts("\n");
             return 0;
+        }
 
         case SYS_GET_USERNAME:
             /* arg1 = buffer, arg2 = buffer size */
