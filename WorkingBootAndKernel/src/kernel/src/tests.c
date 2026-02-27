@@ -245,7 +245,7 @@ void test_vfs_unlink(void) {
     TEST_ASSERT(root != NULL, "Root vnode exists");
 
     /* Create a sub-directory for isolation */
-    struct vnode *testdir = vfs_mkdir(root, "__test_unlink__");
+    struct vnode *testdir = vfs_mkdir_ramfs(root, "__test_unlink__");
     TEST_ASSERT(testdir != NULL, "Created test directory");
 
     /* Create a file inside it */
@@ -259,7 +259,7 @@ void test_vfs_unlink(void) {
     TEST_ASSERT(testdir->v_nchildren == 0, "Directory is empty after unlink");
 
     /* Lookup should fail now */
-    struct vnode *gone = vfs_lookup(testdir, "testfile.txt");
+    struct vnode *gone = vfs_lookup_ramfs(testdir, "testfile.txt");
     TEST_ASSERT(gone == NULL, "Unlinked file not found by lookup");
 
     /* Unlink non-existent — should return -1 */
@@ -318,17 +318,17 @@ void test_vfs_rename(void) {
     TEST_ASSERT(ret == 0, "vfs_rename returned 0");
 
     /* Old name should be gone */
-    struct vnode *old_lookup = vfs_lookup(root, "__rename_src__");
+    struct vnode *old_lookup = vfs_lookup_ramfs(root, "__rename_src__");
     TEST_ASSERT(old_lookup == NULL, "Source name no longer found after rename");
 
     /* New name should be found and point to the same vnode */
-    struct vnode *new_lookup = vfs_lookup(root, "__rename_dst__");
+    struct vnode *new_lookup = vfs_lookup_ramfs(root, "__rename_dst__");
     TEST_ASSERT(new_lookup != NULL, "Destination name found after rename");
     TEST_ASSERT(new_lookup == f, "Renamed vnode is the same object");
 
     /* Cross-directory rename */
-    struct vnode *dir_a = vfs_mkdir(root, "__rename_dir_a__");
-    struct vnode *dir_b = vfs_mkdir(root, "__rename_dir_b__");
+    struct vnode *dir_a = vfs_mkdir_ramfs(root, "__rename_dir_a__");
+    struct vnode *dir_b = vfs_mkdir_ramfs(root, "__rename_dir_b__");
     TEST_ASSERT(dir_a != NULL && dir_b != NULL, "Created dirs A and B");
 
     struct vnode *ff = vfs_create_file(dir_a, "file_in_a");
@@ -336,8 +336,8 @@ void test_vfs_rename(void) {
 
     ret = vfs_rename(dir_a, "file_in_a", dir_b, "file_in_b");
     TEST_ASSERT(ret == 0, "Cross-dir rename returned 0");
-    TEST_ASSERT(vfs_lookup(dir_a, "file_in_a") == NULL, "Source gone from dir A");
-    TEST_ASSERT(vfs_lookup(dir_b, "file_in_b") == ff, "File now in dir B");
+    TEST_ASSERT(vfs_lookup_ramfs(dir_a, "file_in_a") == NULL, "Source gone from dir A");
+    TEST_ASSERT(vfs_lookup_ramfs(dir_b, "file_in_b") == ff, "File now in dir B");
 
     /* Clean up */
     vfs_unlink(dir_b, "file_in_b");

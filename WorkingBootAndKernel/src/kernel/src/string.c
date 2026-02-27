@@ -120,3 +120,34 @@ char* int_to_str(int value, char* buf, int base)
 	
 	return buf;
 }
+
+/*
+ * strncmp
+ * Compare at most n bytes of two strings.
+ */
+int strncmp(const char *s1, const char *s2, size_t n)
+{
+	for (size_t i = 0; i < n; i++) {
+		unsigned char c1 = (unsigned char)s1[i];
+		unsigned char c2 = (unsigned char)s2[i];
+		if (c1 != c2) return (int)c1 - (int)c2;
+		if (c1 == '\0') return 0;
+	}
+	return 0;
+}
+
+/*
+ * strncpy
+ * Copy at most n bytes from src to dst, NUL-padding the remainder.
+ */
+char *strncpy(char *dst, const char *src, size_t n)
+{
+	size_t i;
+	for (i = 0; i < n && src[i] != '\0'; i++) {
+		dst[i] = src[i];
+	}
+	for (; i < n; i++) {
+		dst[i] = '\0';
+	}
+	return dst;
+}

@@ -35,6 +35,7 @@ QEMU_FLAGS :=                                                \
 	-bios OVMF.fd                                              \
 	-drive if=none,id=uas-disk1,file=${DISK_IMG},format=raw    \
 	-device usb-storage,drive=uas-disk1                        \
+	-drive file=${BUILD_DIR}/fat32test.img,format=raw,if=ide,index=0,media=disk \
 	-serial stdio                                              \
 	-usb                                                       \
 	-net none                                                  \
@@ -102,6 +103,9 @@ clean:
 	rm -f ${DISK_IMG}
 	rm -f ${INITRD}
 	rm -f ${USERLAND_ROOT}/bin/user.elf
+	@# Preserve fat32test.img across cleans
+	@if [ -f ${BUILD_DIR}/fat32test.img ]; then mv ${BUILD_DIR}/fat32test.img /tmp/_fat32test.img.bak; fi
 	rm -rf ${BUILD_DIR}
+	@if [ -f /tmp/_fat32test.img.bak ]; then mkdir -p ${BUILD_DIR} && mv /tmp/_fat32test.img.bak ${BUILD_DIR}/fat32test.img; fi
 	
 

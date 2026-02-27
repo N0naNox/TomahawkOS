@@ -426,15 +426,15 @@ int fs_populate_root(void) {
     }
 
     /* ---- Top-level directories ---- */
-    struct vnode *bin   = vfs_mkdir(root, "bin");
-    struct vnode *sbin  = vfs_mkdir(root, "sbin");
-    struct vnode *dev   = vfs_mkdir(root, "dev");
-    struct vnode *etc   = vfs_mkdir(root, "etc");
-    struct vnode *home  = vfs_mkdir(root, "home");
-    struct vnode *tmp   = vfs_mkdir(root, "tmp");
-    struct vnode *usr   = vfs_mkdir(root, "usr");
-    struct vnode *var   = vfs_mkdir(root, "var");
-    struct vnode *proc  = vfs_mkdir(root, "proc");
+    struct vnode *bin   = vfs_mkdir_ramfs(root, "bin");
+    struct vnode *sbin  = vfs_mkdir_ramfs(root, "sbin");
+    struct vnode *dev   = vfs_mkdir_ramfs(root, "dev");
+    struct vnode *etc   = vfs_mkdir_ramfs(root, "etc");
+    struct vnode *home  = vfs_mkdir_ramfs(root, "home");
+    struct vnode *tmp   = vfs_mkdir_ramfs(root, "tmp");
+    struct vnode *usr   = vfs_mkdir_ramfs(root, "usr");
+    struct vnode *var   = vfs_mkdir_ramfs(root, "var");
+    struct vnode *proc  = vfs_mkdir_ramfs(root, "proc");
 
     (void)sbin; (void)dev; (void)tmp; (void)proc;
 
@@ -479,7 +479,7 @@ int fs_populate_root(void) {
 
     /* ---- /home/admin ---- */
     if (home) {
-        struct vnode *admin_home = vfs_mkdir(home, "admin");
+        struct vnode *admin_home = vfs_mkdir_ramfs(home, "admin");
         if (admin_home) {
             create_text_file(admin_home, "welcome.txt",
                 "Welcome to TomahawkOS, admin!\n"
@@ -489,15 +489,15 @@ int fs_populate_root(void) {
 
     /* ---- /usr sub-tree ---- */
     if (usr) {
-        vfs_mkdir(usr, "bin");
-        vfs_mkdir(usr, "lib");
-        vfs_mkdir(usr, "include");
+        vfs_mkdir_ramfs(usr, "bin");
+        vfs_mkdir_ramfs(usr, "lib");
+        vfs_mkdir_ramfs(usr, "include");
     }
 
     /* ---- /var sub-tree ---- */
     if (var) {
-        vfs_mkdir(var, "log");
-        vfs_mkdir(var, "run");
+        vfs_mkdir_ramfs(var, "log");
+        vfs_mkdir_ramfs(var, "run");
     }
 
     /* ---- /bin initial files ---- */

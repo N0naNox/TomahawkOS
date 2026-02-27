@@ -16,8 +16,10 @@
 /* Maximum number of mount points */
 #define MAX_MOUNTS 16
 
-/* Maximum path length */
-#define MAX_PATH 256
+/* Maximum path length (use vnode.h's definition if available) */
+#ifndef MAX_PATH
+#define MAX_PATH 1024
+#endif
 
 /* Filesystem type identifiers */
 #define FS_TYPE_RAMFS   1

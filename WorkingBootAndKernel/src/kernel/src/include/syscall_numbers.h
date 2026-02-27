@@ -27,12 +27,12 @@
    scheduling which corrupts the syscall return path when context switches occur */
 #define SYS_RUN_VFS_DEMO 25
 #define SYS_RUN_TESTS 26
-#define SYS_RUN_FORK_EXEC_WAIT_DEMO 30
+#define SYS_RUN_FAT32_DEMO 27
 
 /* Process execution syscalls */
-#define SYS_EXEC 27
-#define SYS_WAIT 28
-#define SYS_WAITPID 29
+#define SYS_EXEC 28
+#define SYS_WAIT 29
+#define SYS_RUN_FORK_EXEC_WAIT_DEMO 30
 
 /* Shell filesystem command dispatch */
 #define SYS_SHELL_CMD 31
@@ -49,3 +49,18 @@
 #define SYS_UNLINK  38  /* arg1=parent_path, arg2=name */
 #define SYS_RENAME  39  /* arg1=old_path,    arg2=new_path */
 #define SYS_CHMOD   40  /* arg1=path,        arg2=mode */
+
+/* FAT32 shell commands */
+#define SYS_FAT32_MOUNT  50
+#define SYS_FAT32_UMOUNT 51
+#define SYS_FAT32_LS     52
+#define SYS_FAT32_CAT    53
+#define SYS_FAT32_WRITE  54
+#define SYS_FAT32_MKDIR  55
+#define SYS_FAT32_RM     56
+#define SYS_FAT32_CD     57
+#define SYS_FAT32_RENAME 58
+#define SYS_FAT32_CHMOD  59
+
+/* WAITPID */
+#define SYS_WAITPID 60

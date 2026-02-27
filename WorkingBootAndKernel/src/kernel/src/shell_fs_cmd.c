@@ -50,7 +50,7 @@ static void cmd_ls(const char *args) {
     const char *path = skip_spaces(args);
     if (*path == '\0') path = "/";
 
-    struct vnode *vp = vfs_resolve_path(path);
+    struct vnode *vp = vfs_resolve_path_ramfs(path);
     if (!vp) {
         vga_write("ls: cannot access '");
         vga_write(path);
@@ -115,7 +115,7 @@ static void cmd_cat(const char *args) {
         return;
     }
 
-    struct vnode *vp = vfs_resolve_path(path);
+    struct vnode *vp = vfs_resolve_path_ramfs(path);
     if (!vp) {
         vga_write("cat: ");
         vga_write(path);
@@ -179,7 +179,7 @@ static void cmd_mkdir(const char *args) {
         if (plen >= 256) plen = 255;
         for (int i = 0; i < plen; i++) parent_path[i] = path[i];
         parent_path[plen] = '\0';
-        parent = vfs_resolve_path(parent_path);
+        parent = vfs_resolve_path_ramfs(parent_path);
         name = last_slash + 1;
     }
 
@@ -194,7 +194,7 @@ static void cmd_mkdir(const char *args) {
         return;
     }
 
-    struct vnode *dir = vfs_mkdir(parent, name);
+    struct vnode *dir = vfs_mkdir_ramfs(parent, name);
     if (!dir) {
         vga_write("mkdir: cannot create '");
         vga_write(path);
@@ -212,7 +212,7 @@ static void cmd_touch(const char *args) {
     }
 
     /* Check if file already exists */
-    struct vnode *existing = vfs_resolve_path(path);
+    struct vnode *existing = vfs_resolve_path_ramfs(path);
     if (existing) {
         /* File already exists - touch is a no-op */
         return;
@@ -236,7 +236,7 @@ static void cmd_touch(const char *args) {
         if (plen >= 256) plen = 255;
         for (int i = 0; i < plen; i++) parent_path[i] = path[i];
         parent_path[plen] = '\0';
-        parent = vfs_resolve_path(parent_path);
+        parent = vfs_resolve_path_ramfs(parent_path);
         name = last_slash + 1;
     }
 
@@ -272,11 +272,11 @@ static void cmd_write(const char *args) {
     }
 
     /* Resolve or create the file */
-    struct vnode *vp = vfs_resolve_path(path);
+    struct vnode *vp = vfs_resolve_path_ramfs(path);
     if (!vp) {
         /* Try to create it */
         cmd_touch(path);
-        vp = vfs_resolve_path(path);
+        vp = vfs_resolve_path_ramfs(path);
     }
     if (!vp) {
         vga_write("write: cannot open '");
@@ -334,7 +334,7 @@ static void cmd_tree(const char *args) {
     const char *path = skip_spaces(args);
     if (*path == '\0') path = "/";
 
-    struct vnode *vp = vfs_resolve_path(path);
+    struct vnode *vp = vfs_resolve_path_ramfs(path);
     if (!vp) {
         vga_write("tree: '");
         vga_write(path);
@@ -361,7 +361,7 @@ static void cmd_stat(const char *args) {
         return;
     }
 
-    struct vnode *vp = vfs_resolve_path(path);
+    struct vnode *vp = vfs_resolve_path_ramfs(path);
     if (!vp) {
         vga_write("stat: '");
         vga_write(path);
@@ -444,7 +444,7 @@ static void cmd_rm(const char *args) {
         if (plen >= 256) plen = 255;
         for (int i = 0; i < plen; i++) parent_path[i] = path[i];
         parent_path[plen] = '\0';
-        parent = vfs_resolve_path(parent_path);
+        parent = vfs_resolve_path_ramfs(parent_path);
         name = last_slash + 1;
     }
 
@@ -489,7 +489,7 @@ static void cmd_mv(const char *args) {
         if (len >= 256) len = 255;
         for (int i = 0; i < len; i++) src_parent_path[i] = src[i];
         src_parent_path[len] = '\0';
-        src_parent = vfs_resolve_path(src_parent_path);
+        src_parent = vfs_resolve_path_ramfs(src_parent_path);
         src_name = src_slash + 1;
     }
 
@@ -506,7 +506,7 @@ static void cmd_mv(const char *args) {
         if (len >= 256) len = 255;
         for (int i = 0; i < len; i++) dst_parent_path[i] = dst[i];
         dst_parent_path[len] = '\0';
-        dst_parent = vfs_resolve_path(dst_parent_path);
+        dst_parent = vfs_resolve_path_ramfs(dst_parent_path);
         dst_name = dst_slash + 1;
     }
 
@@ -516,7 +516,7 @@ static void cmd_mv(const char *args) {
     }
 
     /* If dst is an existing directory, move src inside it */
-    struct vnode *dst_vp = vfs_resolve_path(dst);
+    struct vnode *dst_vp = vfs_resolve_path_ramfs(dst);
     if (dst_vp && dst_vp->v_type == VDIR) {
         dst_parent = dst_vp;
         dst_name = src_name;  /* keep the basename */
@@ -557,7 +557,7 @@ static void cmd_chmod(const char *args) {
         mode = (uint16_t)((mode << 3) | (uint16_t)(c - '0'));
     }
 
-    struct vnode *vp = vfs_resolve_path(path);
+    struct vnode *vp = vfs_resolve_path_ramfs(path);
     if (!vp) {
         vga_write("chmod: cannot access '");
         vga_write(path);

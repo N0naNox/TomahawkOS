@@ -269,7 +269,7 @@ int init_config_load(void) {
     /* ---- Fallback: resolve via VFS ---- */
     uart_puts("[INITCFG] Falling back to VFS lookup\n");
 
-    struct vnode *vp = vfs_resolve_path(INIT_CFG_PATH);
+    struct vnode *vp = vfs_resolve_path_ramfs(INIT_CFG_PATH);
     if (!vp) {
         uart_puts("[INITCFG] ERROR: " INIT_CFG_PATH " not found in VFS\n");
         return -1;
@@ -331,14 +331,14 @@ int init_config_create_vfs_copy(void) {
     }
 
     /* Resolve /etc */
-    struct vnode *etc = vfs_resolve_path("/etc");
+    struct vnode *etc = vfs_resolve_path_ramfs("/etc");
     if (!etc) {
         uart_puts("[INITCFG] /etc not found in VFS\n");
         return -1;
     }
 
     /* If the file already exists, skip */
-    if (vfs_lookup(etc, "init.conf") != NULL) {
+    if (vfs_lookup_ramfs(etc, "init.conf") != NULL) {
         uart_puts("[INITCFG] /etc/init.conf already exists in VFS\n");
         return 0;
     }
