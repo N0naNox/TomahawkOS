@@ -1385,6 +1385,8 @@ void run_tomahawk_shell(void) {
         "  udpsend <ip> <port> <msg> - Send a UDP datagram over eth0\n"
         "                 e.g.  udpsend 10.0.2.2 9 hello\n"
         "                       udpsend 8.8.8.8 53 test\n"
+        "  netinfo   - Show all NIC IP/MAC/gateway info\n"
+        "  dhcp      - Re-run DHCP on eth0 (if unconfigured)\n"
         "  exit      - Exit shell and return to kernel\n\n")
     /* Build prompts dynamically from init.conf (hostname= and username=) */
     const char *_cfg_host = init_config_get("hostname");

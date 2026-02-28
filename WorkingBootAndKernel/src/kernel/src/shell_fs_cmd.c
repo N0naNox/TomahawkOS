@@ -19,6 +19,7 @@
 #include "include/net_device.h"
 #include "include/net_rx.h"
 #include "include/net.h"
+#include "include/dhcp.h"
 #include <uart.h>
 #include <stddef.h>
 
@@ -576,6 +577,80 @@ static void cmd_chmod(const char *args) {
     }
 }
 
+/* ========== netinfo ========== */
+
+static void vga_print_ip(ipv4_addr_t ip)
+{
+    char buf[4];
+    for (int i = 0; i < 4; i++) {
+        int v = ip.bytes[i], n = 0;
+        if (v == 0) { buf[n++] = '0'; }
+        else { while (v > 0) { buf[n++] = (char)('0' + v % 10); v /= 10; } }
+        /* reverse */
+        for (int a = 0, b = n-1; a < b; a++, b--) { char c = buf[a]; buf[a] = buf[b]; buf[b] = c; }
+        buf[n] = '\0';
+        vga_write(buf);
+        if (i < 3) vga_write(".");
+    }
+}
+
+static void vga_print_mac(mac_addr_t mac)
+{
+    const char *hex = "0123456789abcdef";
+    char buf[3] = {0, 0, 0};
+    for (int i = 0; i < 6; i++) {
+        buf[0] = hex[mac.bytes[i] >> 4];
+        buf[1] = hex[mac.bytes[i] & 0xF];
+        buf[2] = '\0';
+        vga_write(buf);
+        if (i < 5) vga_write(":");
+    }
+}
+
+static void cmd_netinfo(const char *args)
+{
+    (void)args;
+    int count = net_device_count();
+    if (count == 0) { vga_write("No network devices registered.\n"); return; }
+    for (int i = 0; i < count; i++) {
+        net_device_t *dev = net_device_get(i);
+        if (!dev) continue;
+        vga_write(dev->name);
+        vga_write(": ");
+        vga_write(dev->link_up ? "UP" : "DOWN");
+        vga_write("\n  mac     ");
+        vga_print_mac(dev->mac);
+        vga_write("\n  ip      ");
+        vga_print_ip(dev->ip);
+        vga_write("\n  netmask ");
+        vga_print_ip(dev->netmask);
+        vga_write("\n  gateway ");
+        vga_print_ip(dev->gateway);
+        vga_write("\n");
+    }
+}
+
+/* ========== dhcp ========== */
+
+static void cmd_dhcp(const char *args)
+{
+    (void)args;
+    net_device_t *dev = net_device_get_by_name("eth0");
+    if (!dev) { vga_write("dhcp: eth0 not found\n"); return; }
+    if (!dev->link_up) { vga_write("dhcp: eth0 is down\n"); return; }
+    vga_write("dhcp: running DHCP on eth0...\n");
+    int rc = dhcp_discover(dev);
+    if (rc == 0) {
+        vga_write("dhcp: configured eth0: ");
+        vga_print_ip(dev->ip);
+        vga_write(" gw ");
+        vga_print_ip(dev->gateway);
+        vga_write("\n");
+    } else {
+        vga_write("dhcp: failed (timeout)\n");
+    }
+}
+
 /* ========== udpsend ========== */
 
 /**
@@ -729,6 +804,14 @@ int shell_fs_dispatch(const char *cmdline) {
     }
     if (strcmp(cmd, "udpsend") == 0) {
         cmd_udpsend(args);
+        return 0;
+    }
+    if (strcmp(cmd, "netinfo") == 0) {
+        cmd_netinfo(args);
+        return 0;
+    }
+    if (strcmp(cmd, "dhcp") == 0) {
+        cmd_dhcp(args);
         return 0;
     }
 
