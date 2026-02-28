@@ -10,6 +10,7 @@
 #include "include/arp.h"
 #include "include/icmp.h"
 #include "include/udp.h"
+#include "include/tcp.h"
 #include "include/checksum.h"
 #include <uart.h>
 
@@ -141,8 +142,7 @@ void ipv4_receive(struct net_device *dev, struct netbuf *nb)
         break;
 
     case IP_PROTO_TCP:
-        /* TODO: tcp_receive() */
-        uart_puts("[ipv4] TCP packet received (not implemented)\n");
+        tcp_receive(dev, nb, src, dst);
         break;
 
     default:

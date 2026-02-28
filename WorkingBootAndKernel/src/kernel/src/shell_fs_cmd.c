@@ -20,6 +20,8 @@
 #include "include/net_rx.h"
 #include "include/net.h"
 #include "include/dhcp.h"
+#include "include/dns.h"
+#include "include/http.h"
 #include <uart.h>
 #include <stddef.h>
 
@@ -733,6 +735,82 @@ static void cmd_udpsend(const char *args)
     }
 }
 
+/* ========== httpget ========== */
+
+/**
+ * @brief Perform an HTTP GET and print the response body.
+ *
+ * Usage: httpget <domain> [/path] [port]
+ * Port defaults to 80.  Path defaults to /.
+ * Examples:
+ *   httpget jsonplaceholder.typicode.com /todos/1
+ *   httpget 10.0.2.2 / 8080       (local: python -m http.server 8080 on Windows)
+ *   httpget api.ipify.org /?format=json
+ */
+static void cmd_httpget(const char *args)
+{
+    if (!args || *args == '\0') {
+        vga_write("usage: httpget <domain> [/path] [port]\n");
+        return;
+    }
+
+    /* Token 1: domain */
+    char domain[128];
+    const char *rest = next_token(args, domain, (int)sizeof(domain));
+    if (domain[0] == '\0') { vga_write("httpget: missing domain\n"); return; }
+
+    /* Token 2: path (must start with '/') or port number, default "/" */
+    char path[256];
+    const char *rest2 = next_token(rest, path, (int)sizeof(path));
+    uint16_t port = 80;
+
+    if (path[0] == '\0' || path[0] == '/') {
+        /* It's a path (or empty → use "/") */
+        if (path[0] == '\0') { path[0] = '/'; path[1] = '\0'; }
+
+        /* Token 3: optional port number */
+        char portstr[16];
+        next_token(rest2, portstr, (int)sizeof(portstr));
+        if (portstr[0] >= '0' && portstr[0] <= '9') {
+            uint32_t p = 0;
+            for (int i = 0; portstr[i] >= '0' && portstr[i] <= '9'; i++)
+                p = p * 10 + (uint32_t)(portstr[i] - '0');
+            if (p > 0 && p <= 65535) port = (uint16_t)p;
+        }
+    } else if (path[0] >= '0' && path[0] <= '9') {
+        /* Token 2 is actually a port number, no path given */
+        uint32_t p = 0;
+        for (int i = 0; path[i] >= '0' && path[i] <= '9'; i++)
+            p = p * 10 + (uint32_t)(path[i] - '0');
+        if (p > 0 && p <= 65535) port = (uint16_t)p;
+        path[0] = '/'; path[1] = '\0';
+    } else {
+        /* Unrecognised second token — fall back to root */
+        path[0] = '/'; path[1] = '\0';
+    }
+
+    /* Get NIC */
+    net_device_t *dev = net_device_get_by_name("eth0");
+    if (!dev) dev = net_device_get_by_name("lo");
+    if (!dev) { vga_write("httpget: no NIC available\n"); return; }
+
+    vga_write("httpget: fetching http://");
+    vga_write(domain);
+    vga_write(path);
+    vga_write("\n");
+
+    static char body[8192];
+    int rc = http_get(dev, domain, port, path, body, sizeof(body));
+
+    if (rc == -1) { vga_write("httpget: DNS resolution failed\n"); return; }
+    if (rc == -2) { vga_write("httpget: TCP connect/send failed\n"); return; }
+    if (rc == -4) { vga_write("httpget: empty or malformed response\n"); return; }
+
+    vga_write(body);
+    vga_write("\n");
+    if (rc == -3) vga_write("[httpget: response truncated]\n");
+}
+
 /* ========== Main dispatcher ========== */
 
 /**
@@ -812,6 +890,10 @@ int shell_fs_dispatch(const char *cmdline) {
     }
     if (strcmp(cmd, "dhcp") == 0) {
         cmd_dhcp(args);
+        return 0;
+    }
+    if (strcmp(cmd, "httpget") == 0) {
+        cmd_httpget(args);
         return 0;
     }
 

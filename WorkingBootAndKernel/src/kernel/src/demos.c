@@ -1387,6 +1387,9 @@ void run_tomahawk_shell(void) {
         "                       udpsend 8.8.8.8 53 test\n"
         "  netinfo   - Show all NIC IP/MAC/gateway info\n"
         "  dhcp      - Re-run DHCP on eth0 (if unconfigured)\n"
+        "  httpget <domain> [/path] [port] - HTTP GET, prints response body\n"
+        "                 e.g.  httpget jsonplaceholder.typicode.com /todos/1\n"
+        "                       httpget 10.0.2.2 / 8080\n"
         "  exit      - Exit shell and return to kernel\n\n")
     /* Build prompts dynamically from init.conf (hostname= and username=) */
     const char *_cfg_host = init_config_get("hostname");

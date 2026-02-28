@@ -22,6 +22,7 @@
 #include "include/ethernet.h"
 #include "include/arp.h"
 #include "include/udp.h"
+#include "include/tcp.h"
 #include "include/loopback.h"
 #include "include/socket.h"
 #include "include/e1000.h"
@@ -624,6 +625,10 @@ void net_init(void)
     /* 3. UDP bind table */
     udp_init();
     uart_puts("[net]   UDP layer ready\n");
+
+    /* 3b. TCP connection state */
+    tcp_init();
+    uart_puts("[net]   TCP layer ready\n");
 
     /* 4. Loopback interface (lo / 127.0.0.1) */
     loopback_init();

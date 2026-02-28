@@ -200,6 +200,9 @@ static uint32_t rx_tail = 0;   /* RDT write pointer */
 /* The net_device struct registered with the stack */
 static net_device_t eth0_device;
 
+/* Diagnostic: total frames received (check at tcp timeout) */
+volatile uint32_t e1000_rx_count = 0;
+
 /* ====================================================================
  *  MMIO helpers
  * ==================================================================== */
@@ -316,6 +319,8 @@ static int e1000_poll(struct net_device *dev, struct netbuf *nb)
 
     if (!(rx_ring[idx].status & E1000_RXD_STA_DD))
         return -1;   /* nothing ready */
+
+    e1000_rx_count++;
 
     uint16_t len = rx_ring[idx].length;
     if (len > E1000_BUF_SIZE) len = E1000_BUF_SIZE;
