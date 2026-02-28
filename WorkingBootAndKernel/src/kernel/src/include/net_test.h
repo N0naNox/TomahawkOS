@@ -17,4 +17,17 @@
  */
 void net_test_loopback(void);
 
+/**
+ * @brief Run the socket-layer self-test over loopback.
+ *
+ * Exercises the socket API (sock_create, sock_bind, sock_sendto,
+ * sock_recvfrom, sock_close) end-to-end over 127.0.0.1.
+ * Because loopback is synchronous the received datagram is already
+ * in the RX ring by the time sendto() returns, so the test never
+ * blocks.
+ *
+ * Results are printed to serial (UART).
+ */
+void socket_self_test(void);
+
 #endif /* NET_TEST_H */

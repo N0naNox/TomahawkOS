@@ -16,6 +16,7 @@
 #include "include/vnode.h"
 #include "include/tty.h"
 #include "uart.h"
+#include "include/socket.h"
 
 /* External saved context from usermode demo */
 extern volatile uint64_t usermode_demo_return_rsp;
@@ -464,6 +465,78 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             /* Line editing with cursor, arrows, history — delegated to TTY */
             /* arg1 = buffer pointer,  arg2 = max length (including NUL) */
             return (uint64_t)tty_readline(tty_console(), (char *)arg1, (int)arg2);
+
+        /* ===== Socket syscalls ===== */
+
+        case SYS_SOCKET:
+            /* socket(domain, type, protocol)
+             * arg1 = domain   (AF_INET)
+             * arg2 = type     (SOCK_DGRAM / SOCK_STREAM)
+             * arg3 = protocol (0 = auto, IPPROTO_UDP, IPPROTO_TCP)
+             * returns: non-negative fd on success, negative SOCK_ERR_* on failure */
+            return (uint64_t)(int64_t)sock_create((int)arg1, (int)arg2, (int)arg3);
+
+        case SYS_BIND:
+            /* bind(fd, *sockaddr_in)
+             * arg1 = socket fd
+             * arg2 = pointer to sockaddr_in_t
+             * returns: 0 on success, negative SOCK_ERR_* on failure */
+            if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            return (uint64_t)(int64_t)sock_bind((int)arg1, (const sockaddr_in_t *)arg2);
+
+        case SYS_SENDTO:
+            /* sendto(fd, *socket_io_args_t)
+             * arg1 = socket fd
+             * arg2 = pointer to socket_io_args_t { buf, len, addr (destination) }
+             * returns: bytes sent on success, negative SOCK_ERR_* on failure */
+            if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            {
+                socket_io_args_t *io = (socket_io_args_t *)arg2;
+                return (uint64_t)(int64_t)sock_sendto((int)arg1, io->buf, io->len, &io->addr);
+            }
+
+        case SYS_RECVFROM:
+            /* recvfrom(fd, *socket_io_args_t)
+             * arg1 = socket fd
+             * arg2 = pointer to socket_io_args_t { buf, len (capacity), addr (filled on return) }
+             * returns: bytes received on success, negative SOCK_ERR_* on failure */
+            if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            {
+                socket_io_args_t *io = (socket_io_args_t *)arg2;
+                return (uint64_t)(int64_t)sock_recvfrom((int)arg1, io->buf, io->len, &io->addr);
+            }
+
+        case SYS_CONNECT:
+            /* connect(fd, *sockaddr_in)
+             * arg1 = socket fd
+             * arg2 = pointer to sockaddr_in_t (remote address)
+             * returns: 0 on success, negative SOCK_ERR_* on failure */
+            if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            return (uint64_t)(int64_t)sock_connect((int)arg1, (const sockaddr_in_t *)arg2);
+
+        case SYS_SEND:
+            /* send(fd, buf, len)  — requires prior connect()
+             * arg1 = socket fd
+             * arg2 = pointer to payload buffer
+             * arg3 = payload length
+             * returns: bytes sent on success, negative SOCK_ERR_* on failure */
+            if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            return (uint64_t)(int64_t)sock_send((int)arg1, (const void *)arg2, (uint16_t)arg3);
+
+        case SYS_RECV:
+            /* recv(fd, buf, maxlen)  — requires prior connect()
+             * arg1 = socket fd
+             * arg2 = pointer to receive buffer
+             * arg3 = maximum bytes to receive
+             * returns: bytes received on success, negative SOCK_ERR_* on failure */
+            if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            return (uint64_t)(int64_t)sock_recv((int)arg1, (void *)arg2, (uint16_t)arg3);
+
+        case SYS_SOCK_CLOSE:
+            /* sock_close(fd)
+             * arg1 = socket fd
+             * returns: 0 on success, negative SOCK_ERR_* on failure */
+            return (uint64_t)(int64_t)sock_close((int)arg1);
 
         default:
             uart_puts("[KERNEL] Unknown syscall: ");
