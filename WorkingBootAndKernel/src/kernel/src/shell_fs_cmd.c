@@ -15,6 +15,13 @@
 #include "include/shell_fs_cmd.h"
 #include "include/demos.h"
 #include "include/init_config.h"
+#include "include/udp.h"
+#include "include/net_device.h"
+#include "include/net_rx.h"
+#include "include/net.h"
+#include "include/dhcp.h"
+#include "include/dns.h"
+#include "include/http.h"
 #include <uart.h>
 #include <stddef.h>
 
@@ -572,6 +579,238 @@ static void cmd_chmod(const char *args) {
     }
 }
 
+/* ========== netinfo ========== */
+
+static void vga_print_ip(ipv4_addr_t ip)
+{
+    char buf[4];
+    for (int i = 0; i < 4; i++) {
+        int v = ip.bytes[i], n = 0;
+        if (v == 0) { buf[n++] = '0'; }
+        else { while (v > 0) { buf[n++] = (char)('0' + v % 10); v /= 10; } }
+        /* reverse */
+        for (int a = 0, b = n-1; a < b; a++, b--) { char c = buf[a]; buf[a] = buf[b]; buf[b] = c; }
+        buf[n] = '\0';
+        vga_write(buf);
+        if (i < 3) vga_write(".");
+    }
+}
+
+static void vga_print_mac(mac_addr_t mac)
+{
+    const char *hex = "0123456789abcdef";
+    char buf[3] = {0, 0, 0};
+    for (int i = 0; i < 6; i++) {
+        buf[0] = hex[mac.bytes[i] >> 4];
+        buf[1] = hex[mac.bytes[i] & 0xF];
+        buf[2] = '\0';
+        vga_write(buf);
+        if (i < 5) vga_write(":");
+    }
+}
+
+static void cmd_netinfo(const char *args)
+{
+    (void)args;
+    int count = net_device_count();
+    if (count == 0) { vga_write("No network devices registered.\n"); return; }
+    for (int i = 0; i < count; i++) {
+        net_device_t *dev = net_device_get(i);
+        if (!dev) continue;
+        vga_write(dev->name);
+        vga_write(": ");
+        vga_write(dev->link_up ? "UP" : "DOWN");
+        vga_write("\n  mac     ");
+        vga_print_mac(dev->mac);
+        vga_write("\n  ip      ");
+        vga_print_ip(dev->ip);
+        vga_write("\n  netmask ");
+        vga_print_ip(dev->netmask);
+        vga_write("\n  gateway ");
+        vga_print_ip(dev->gateway);
+        vga_write("\n");
+    }
+}
+
+/* ========== dhcp ========== */
+
+static void cmd_dhcp(const char *args)
+{
+    (void)args;
+    net_device_t *dev = net_device_get_by_name("eth0");
+    if (!dev) { vga_write("dhcp: eth0 not found\n"); return; }
+    if (!dev->link_up) { vga_write("dhcp: eth0 is down\n"); return; }
+    vga_write("dhcp: running DHCP on eth0...\n");
+    int rc = dhcp_discover(dev);
+    if (rc == 0) {
+        vga_write("dhcp: configured eth0: ");
+        vga_print_ip(dev->ip);
+        vga_write(" gw ");
+        vga_print_ip(dev->gateway);
+        vga_write("\n");
+    } else {
+        vga_write("dhcp: failed (timeout)\n");
+    }
+}
+
+/* ========== udpsend ========== */
+
+/**
+ * @brief Send a single UDP datagram over the default NIC.
+ *
+ * Usage: udpsend <ip> <port> <message>
+ * Example: udpsend 10.0.2.2 9 hello
+ */
+static void cmd_udpsend(const char *args)
+{
+    if (!args || *args == '\0') {
+        vga_write("usage: udpsend <ip> <port> <message>\n");
+        return;
+    }
+
+    /* Parse destination IP: a.b.c.d */
+    const char *p = skip_spaces(args);
+    uint8_t ip[4] = {0};
+    for (int i = 0; i < 4; i++) {
+        uint32_t v = 0;
+        while (*p >= '0' && *p <= '9') { v = v * 10 + (uint32_t)(*p - '0'); p++; }
+        ip[i] = (uint8_t)v;
+        if (i < 3) { if (*p == '.') p++; else { vga_write("udpsend: bad IP\n"); return; } }
+    }
+    if (*p != ' ' && *p != '\t') { vga_write("udpsend: bad IP\n"); return; }
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* Parse destination port */
+    uint32_t port = 0;
+    while (*p >= '0' && *p <= '9') { port = port * 10 + (uint32_t)(*p - '0'); p++; }
+    if (port == 0 || port > 65535) { vga_write("udpsend: bad port\n"); return; }
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* Remainder is the message */
+    const char *msg = p;
+    uint16_t msg_len = 0;
+    while (msg[msg_len]) msg_len++;
+    if (msg_len == 0) { vga_write("udpsend: empty message\n"); return; }
+
+    /* Get the default NIC (eth0 if available, else lo) */
+    net_device_t *dev = net_device_get_by_name("eth0");
+    if (!dev) dev = net_device_get_by_name("lo");
+    if (!dev) { vga_write("udpsend: no NIC available\n"); return; }
+
+    ipv4_addr_t dst = {{ip[0], ip[1], ip[2], ip[3]}};
+
+    /* udp_send may fail on the first try because ipv4_send fires an ARP
+     * request and immediately returns -1 (async ARP).  Poll the NIC to
+     * process the ARP reply, then retry up to 5 times. */
+    int rc = -1;
+    for (int attempt = 0; attempt < 5 && rc != 0; attempt++) {
+        rc = udp_send(dev, dst,
+                      49152u,          /* ephemeral source port */
+                      (uint16_t)port,
+                      (const void *)msg, msg_len);
+        if (rc != 0) {
+            /* Pump the RX ring so the ARP reply can arrive */
+            for (int i = 0; i < 50000; i++) {
+                net_device_poll_all();
+                net_rx_process();
+            }
+        }
+    }
+
+    if (rc == 0) {
+        vga_write("udpsend: sent ");
+        /* simple decimal print of msg_len */
+        char nbuf[8];
+        int ni = 0;
+        uint16_t tmp = msg_len;
+        if (tmp == 0) { nbuf[ni++] = '0'; }
+        else { while (tmp > 0) { nbuf[ni++] = (char)('0' + tmp % 10); tmp /= 10; } }
+        /* reverse */
+        for (int a = 0, b = ni-1; a < b; a++, b--) { char c = nbuf[a]; nbuf[a] = nbuf[b]; nbuf[b] = c; }
+        nbuf[ni] = '\0';
+        vga_write(nbuf);
+        vga_write(" bytes\n");
+    } else {
+        vga_write("udpsend: send failed\n");
+    }
+}
+
+/* ========== httpget ========== */
+
+/**
+ * @brief Perform an HTTP GET and print the response body.
+ *
+ * Usage: httpget <domain> [/path] [port]
+ * Port defaults to 80.  Path defaults to /.
+ * Examples:
+ *   httpget jsonplaceholder.typicode.com /todos/1
+ *   httpget 10.0.2.2 / 8080       (local: python -m http.server 8080 on Windows)
+ *   httpget api.ipify.org /?format=json
+ */
+static void cmd_httpget(const char *args)
+{
+    if (!args || *args == '\0') {
+        vga_write("usage: httpget <domain> [/path] [port]\n");
+        return;
+    }
+
+    /* Token 1: domain */
+    char domain[128];
+    const char *rest = next_token(args, domain, (int)sizeof(domain));
+    if (domain[0] == '\0') { vga_write("httpget: missing domain\n"); return; }
+
+    /* Token 2: path (must start with '/') or port number, default "/" */
+    char path[256];
+    const char *rest2 = next_token(rest, path, (int)sizeof(path));
+    uint16_t port = 80;
+
+    if (path[0] == '\0' || path[0] == '/') {
+        /* It's a path (or empty → use "/") */
+        if (path[0] == '\0') { path[0] = '/'; path[1] = '\0'; }
+
+        /* Token 3: optional port number */
+        char portstr[16];
+        next_token(rest2, portstr, (int)sizeof(portstr));
+        if (portstr[0] >= '0' && portstr[0] <= '9') {
+            uint32_t p = 0;
+            for (int i = 0; portstr[i] >= '0' && portstr[i] <= '9'; i++)
+                p = p * 10 + (uint32_t)(portstr[i] - '0');
+            if (p > 0 && p <= 65535) port = (uint16_t)p;
+        }
+    } else if (path[0] >= '0' && path[0] <= '9') {
+        /* Token 2 is actually a port number, no path given */
+        uint32_t p = 0;
+        for (int i = 0; path[i] >= '0' && path[i] <= '9'; i++)
+            p = p * 10 + (uint32_t)(path[i] - '0');
+        if (p > 0 && p <= 65535) port = (uint16_t)p;
+        path[0] = '/'; path[1] = '\0';
+    } else {
+        /* Unrecognised second token — fall back to root */
+        path[0] = '/'; path[1] = '\0';
+    }
+
+    /* Get NIC */
+    net_device_t *dev = net_device_get_by_name("eth0");
+    if (!dev) dev = net_device_get_by_name("lo");
+    if (!dev) { vga_write("httpget: no NIC available\n"); return; }
+
+    vga_write("httpget: fetching http://");
+    vga_write(domain);
+    vga_write(path);
+    vga_write("\n");
+
+    static char body[8192];
+    int rc = http_get(dev, domain, port, path, body, sizeof(body));
+
+    if (rc == -1) { vga_write("httpget: DNS resolution failed\n"); return; }
+    if (rc == -2) { vga_write("httpget: TCP connect/send failed\n"); return; }
+    if (rc == -4) { vga_write("httpget: empty or malformed response\n"); return; }
+
+    vga_write(body);
+    vga_write("\n");
+    if (rc == -3) vga_write("[httpget: response truncated]\n");
+}
+
 /* ========== Main dispatcher ========== */
 
 /**
@@ -639,6 +878,22 @@ int shell_fs_dispatch(const char *cmdline) {
     }
     if (strcmp(cmd, "chmod") == 0) {
         cmd_chmod(args);
+        return 0;
+    }
+    if (strcmp(cmd, "udpsend") == 0) {
+        cmd_udpsend(args);
+        return 0;
+    }
+    if (strcmp(cmd, "netinfo") == 0) {
+        cmd_netinfo(args);
+        return 0;
+    }
+    if (strcmp(cmd, "dhcp") == 0) {
+        cmd_dhcp(args);
+        return 0;
+    }
+    if (strcmp(cmd, "httpget") == 0) {
+        cmd_httpget(args);
         return 0;
     }
 

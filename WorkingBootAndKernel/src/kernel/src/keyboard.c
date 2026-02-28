@@ -19,7 +19,8 @@ static volatile int kb_head = 0;
 static volatile int kb_tail = 0;
 
 /* Modifier state tracked across IRQs */
-static volatile int ctrl_held = 0;
+static volatile int ctrl_held  = 0;
+static volatile int shift_held = 0;
 
 /* Basic scancode set 1 to ASCII map (0..0x7F). 0 means unmapped */
 static const char scancode_map[128] = {
@@ -31,6 +32,19 @@ static const char scancode_map[128] = {
     'd','f','g','h','j','k','l', ';','\'', '`', 0, '\\','z','x','c','v',
     /* 0x30 - 0x3F */
     'b','n','m',',','.','/', 0,  '*', 0, ' ', 0, 0, 0, 0, 0, 0,
+    /* rest default 0 */
+};
+
+/* Shifted (Shift held) scancode table */
+static const char scancode_map_shift[128] = {
+    /* 0x00 - 0x0F */
+    0,  0, '!','@','#','$','%','^','&','*','(',')','_','+', 0,  0,
+    /* 0x10 - 0x1F */
+    'Q','W','E','R','T','Y','U','I','O','P','{','}', '\n', 0, 'A','S',
+    /* 0x20 - 0x2F */
+    'D','F','G','H','J','K','L', ':','"', '~', 0, '|','Z','X','C','V',
+    /* 0x30 - 0x3F */
+    'B','N','M','<','>','?', 0,  '*', 0, ' ', 0, 0, 0, 0, 0, 0,
     /* rest default 0 */
 };
 
@@ -68,6 +82,10 @@ static void keyboard_irq_handler(regs_t* r) {
     if (sc == 0x1D) { ctrl_held = 1; return; }
     if (sc == 0x9D) { ctrl_held = 0; return; }
 
+    /* Track Shift key state (0x2A = left shift, 0x36 = right shift) */
+    if (sc == 0x2A || sc == 0x36) { shift_held = 1; return; }
+    if (sc == 0xAA || sc == 0xB6) { shift_held = 0; return; }
+
     /* Ignore other break codes (high bit set) */
     if (sc & 0x80) {
         return;
@@ -100,8 +118,8 @@ static void keyboard_irq_handler(regs_t* r) {
     char c = 0;
     if (sc == 0x01) {
         c = 27; /* ESC */
-    } else if (sc < sizeof(scancode_map)) {
-        c = scancode_map[sc];
+    } else if (sc < 128) {
+        c = shift_held ? scancode_map_shift[sc] : scancode_map[sc];
     }
 
     if (c) {
@@ -194,7 +212,7 @@ void keyboard_poll_once(void) {
     if (sc & 0x80) return;
 
     char c = 0;
-    if (sc < sizeof(scancode_map)) c = scancode_map[sc];
+    if (sc < 128) c = shift_held ? scancode_map_shift[sc] : scancode_map[sc];
     if (!c) return;
 
     uart_putchar(c);

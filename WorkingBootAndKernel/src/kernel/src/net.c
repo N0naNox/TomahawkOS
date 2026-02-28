@@ -22,8 +22,11 @@
 #include "include/ethernet.h"
 #include "include/arp.h"
 #include "include/udp.h"
+#include "include/tcp.h"
 #include "include/loopback.h"
 #include "include/socket.h"
+#include "include/e1000.h"
+#include "include/dhcp.h"
 #include "include/string.h"
 #include "include/hal_port_io.h"
 #include "include/idt.h"
@@ -623,13 +626,29 @@ void net_init(void)
     udp_init();
     uart_puts("[net]   UDP layer ready\n");
 
+    /* 3b. TCP connection state */
+    tcp_init();
+    uart_puts("[net]   TCP layer ready\n");
+
     /* 4. Loopback interface (lo / 127.0.0.1) */
     loopback_init();
 
     /* 5. Socket layer */
     socket_init();
 
-    /* 6. Print the interface table so it appears in the boot serial log */
+    /* 6. e1000 NIC (probes PCI bus 0 for 82540EM, registers eth0) */
+    e1000_init();
+
+    /* 7. DHCP — configure eth0 if the NIC was found */
+    {
+        net_device_t *eth0 = net_device_get_by_name("eth0");
+        if (eth0) {
+            uart_puts("[net]   Running DHCP on eth0...\n");
+            dhcp_discover(eth0);
+        }
+    }
+
+    /* 8. Print the interface table so it appears in the boot serial log */
     net_device_print_all_stats();
 
     uart_puts("[net] Network stack architecture initialised.\n");

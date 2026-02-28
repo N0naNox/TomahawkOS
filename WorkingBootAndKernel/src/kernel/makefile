@@ -89,7 +89,12 @@ C_SOURCES  :=              \
 	${SRC_DIR}/net_test.c \
 	${SRC_DIR}/net_rx.c \
 	${SRC_DIR}/net_tx.c \
-	${SRC_DIR}/socket.c
+	${SRC_DIR}/socket.c \
+	${SRC_DIR}/e1000.c \
+	${SRC_DIR}/dhcp.c \
+	${SRC_DIR}/tcp.c \
+	${SRC_DIR}/dns.c \
+	${SRC_DIR}/http.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})

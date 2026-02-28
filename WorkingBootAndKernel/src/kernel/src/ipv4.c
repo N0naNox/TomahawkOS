@@ -10,6 +10,7 @@
 #include "include/arp.h"
 #include "include/icmp.h"
 #include "include/udp.h"
+#include "include/tcp.h"
 #include "include/checksum.h"
 #include <uart.h>
 
@@ -49,10 +50,27 @@ int ipv4_send(struct net_device *dev,
     /* Record net_offset */
     nb->net_offset = (uint16_t)(nb->data - nb->buf);
 
+    /* ---- Broadcast / multicast short-circuit ----
+     * 255.255.255.255 and the subnet broadcast go directly to MAC_BROADCAST
+     * without ARP.  This is essential for DHCP Discover which must be sent
+     * before we have any IP address or ARP cache entries.               */
+    ipv4_addr_t subnet_bcast;
+    subnet_bcast.addr = (dev->ip.addr | ~dev->netmask.addr);
+
+    if (ipv4_equal(dst, IPV4_BROADCAST) || ipv4_equal(dst, subnet_bcast)) {
+        return ethernet_send_frame(dev, nb, MAC_BROADCAST, ETHERTYPE_IPV4);
+    }
+
     /* Determine next-hop: if dst is on-link, ARP for it directly;
-       otherwise ARP for the gateway. */
+       otherwise ARP for the gateway.
+       Guard against unconfigured netmask (0.0.0.0): treat any destination
+       as off-link when the netmask is zero so we use the gateway rather
+       than trying to ARP for a remote address directly. */
     ipv4_addr_t next_hop = dst;
-    if ((dst.addr & dev->netmask.addr) != (dev->ip.addr & dev->netmask.addr)) {
+    int on_link = (dev->netmask.addr != 0)
+               && ((dst.addr & dev->netmask.addr)
+                   == (dev->ip.addr & dev->netmask.addr));
+    if (!on_link && dev->gateway.addr != 0) {
         /* Off-link → go through gateway */
         next_hop = dev->gateway;
     }
@@ -124,8 +142,7 @@ void ipv4_receive(struct net_device *dev, struct netbuf *nb)
         break;
 
     case IP_PROTO_TCP:
-        /* TODO: tcp_receive() */
-        uart_puts("[ipv4] TCP packet received (not implemented)\n");
+        tcp_receive(dev, nb, src, dst);
         break;
 
     default:
