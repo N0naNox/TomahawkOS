@@ -30,4 +30,18 @@ void net_test_loopback(void);
  */
 void socket_self_test(void);
 
+/**
+ * @brief Run the network interface abstraction self-test.
+ *
+ * Exercises every function added to the NIC abstraction layer:
+ *   net_device_find_by_ip, net_device_route,
+ *   net_device_up / net_device_down (lifecycle + idempotency),
+ *   net_device_transmit (raw send + stat accounting),
+ *   net_device_poll_all (smoke-test, lo always returns -1),
+ *   net_device_print_stats / net_device_print_all_stats.
+ *
+ * Results are printed to serial (UART).
+ */
+void net_device_iface_test(void);
+
 #endif /* NET_TEST_H */

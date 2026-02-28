@@ -299,6 +299,9 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	/* Run socket-layer self-test (results printed to serial) */
 	socket_self_test();
 
+	/* Run network interface abstraction self-test (results printed to serial) */
+	net_device_iface_test();
+
 	scheduler_init();
 
 	/* Create essential threads */

@@ -154,4 +154,99 @@ void net_device_set_ip(net_device_t *dev,
                        ipv4_addr_t netmask,
                        ipv4_addr_t gateway);
 
+/* ====================================================================
+ *  Interface lifecycle
+ * ==================================================================== */
+
+/**
+ * @brief Bring a network interface up (calls ops->start, sets link_up).
+ *
+ * Safe to call when the interface is already up (no-op).
+ * @return 0 on success, -1 if dev is NULL, or the ops->start error code.
+ */
+int net_device_up(net_device_t *dev);
+
+/**
+ * @brief Bring a network interface down (calls ops->stop, clears link_up).
+ *
+ * Safe to call when the interface is already down (no-op).
+ * @return 0 on success, -1 if dev is NULL, or the ops->stop error code.
+ */
+int net_device_down(net_device_t *dev);
+
+/* ====================================================================
+ *  Raw transmit
+ * ==================================================================== */
+
+/**
+ * @brief Send a pre-built frame directly through the NIC driver.
+ *
+ * Unlike ethernet_send_frame(), this function does NOT prepend any
+ * L2 header — it expects `nb->data` to already point at a fully
+ * formed frame.  Useful for raw sockets and for the Ethernet layer
+ * itself.  Updates tx_packets / tx_bytes / tx_errors.
+ *
+ * @param dev  Network device.
+ * @param nb   Packet buffer with a complete frame.
+ * @return 0 on success, negative on error.
+ */
+int net_device_transmit(net_device_t *dev, struct netbuf *nb);
+
+/* ====================================================================
+ *  Receive pump
+ * ==================================================================== */
+
+/**
+ * @brief Poll every registered device for received frames.
+ *
+ * For each device whose ops->poll() callback returns a frame, the
+ * frame is forwarded to ethernet_receive().  Polling stops per-device
+ * when poll() returns -1 (no more frames available).
+ *
+ * Call this from a kernel thread or timer ISR for poll-driven NICs.
+ * Interrupt-driven NICs never need this.
+ */
+void net_device_poll_all(void);
+
+/* ====================================================================
+ *  Routing helpers
+ * ==================================================================== */
+
+/**
+ * @brief Find the device whose assigned IP matches `ip` exactly.
+ * @return Pointer to the device, or NULL if no match.
+ */
+net_device_t *net_device_find_by_ip(ipv4_addr_t ip);
+
+/**
+ * @brief Select the best outgoing interface for a destination IP.
+ *
+ * Simple longest-prefix-match over registered devices:
+ *   1. If `dst_ip` falls within a device's subnet  → return that device.
+ *   2. If multiple subnets match, the first match wins (no metric yet).
+ *   3. If no subnet matches, fall back to the device that has a non-zero
+ *      gateway configured (default route).
+ *   4. If still no candidate, return net_device_get_default().
+ *
+ * @param dst_ip Destination IPv4 address (network byte order).
+ * @return Best device for this destination, or NULL if none registered.
+ */
+net_device_t *net_device_route(ipv4_addr_t dst_ip);
+
+/* ====================================================================
+ *  Diagnostics
+ * ==================================================================== */
+
+/**
+ * @brief Print statistics for a single device to serial (UART).
+ *
+ * Prints: name, IP, MAC, link state, tx/rx packet/byte/error counts.
+ */
+void net_device_print_stats(net_device_t *dev);
+
+/**
+ * @brief Print statistics for all registered devices to serial (UART).
+ */
+void net_device_print_all_stats(void);
+
 #endif /* NET_DEVICE_H */

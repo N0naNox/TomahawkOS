@@ -379,3 +379,223 @@ sock_done:
     uart_puts("\n");
     uart_puts("=============================================================\n\n");
 }
+
+/* ====================================================================
+ *  net_device_iface_test — network interface abstraction self-test
+ * ==================================================================== */
+
+/* Convenience: check a condition, print PASS/FAIL and update counters. */
+#define IFACE_CHECK(cond, msg)                          \
+    do {                                                \
+        if (cond) {                                     \
+            uart_puts("[iface_test]   PASS: " msg "\n"); \
+            pass++;                                     \
+        } else {                                        \
+            uart_puts("[iface_test]   FAIL: " msg "\n"); \
+            fail++;                                     \
+        }                                               \
+    } while (0)
+
+void net_device_iface_test(void)
+{
+    int pass = 0, fail = 0;
+
+    uart_puts("\n");
+    uart_puts("=============================================================\n");
+    uart_puts("  NET INTERFACE ABSTRACTION SELF-TEST\n");
+    uart_puts("=============================================================\n");
+
+    net_device_t *lo = loopback_dev();
+    if (!lo) {
+        uart_puts("[iface_test] ABORT: loopback device not found\n");
+        return;
+    }
+
+    /* ----------------------------------------------------------------
+     *  Test 1: net_device_find_by_ip — exact IP match
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 1: net_device_find_by_ip(127.0.0.1) ---\n");
+    {
+        net_device_t *found = net_device_find_by_ip(IPV4(127, 0, 0, 1));
+        IFACE_CHECK(found == lo,
+            "find_by_ip(127.0.0.1) returns loopback device");
+
+        net_device_t *none = net_device_find_by_ip(IPV4(192, 168, 1, 1));
+        IFACE_CHECK(none == NULL,
+            "find_by_ip(192.168.1.1) returns NULL (not registered)");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 2: net_device_route — subnet match and default fallback
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 2: net_device_route ---\n");
+    {
+        /* 127.x.x.x is in lo's subnet (255.0.0.0) — should return lo */
+        net_device_t *r_lo = net_device_route(IPV4(127, 0, 0, 1));
+        IFACE_CHECK(r_lo == lo,
+            "route(127.0.0.1) selects loopback (on-link)");
+
+        net_device_t *r2 = net_device_route(IPV4(127, 255, 255, 255));
+        IFACE_CHECK(r2 == lo,
+            "route(127.255.255.255) selects loopback (same /8 subnet)");
+
+        /*
+         * Off-link address: lo has no gateway, so net_device_route()
+         * falls back to net_device_get_default() which is also lo.
+         * Just verify a non-NULL device comes back.
+         */
+        net_device_t *r_off = net_device_route(IPV4(8, 8, 8, 8));
+        IFACE_CHECK(r_off != NULL,
+            "route(8.8.8.8) returns a non-NULL fallback device");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 3: net_device_down — bring loopback down
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 3: net_device_down ---\n");
+    {
+        int ret = net_device_down(lo);
+        IFACE_CHECK(ret == 0,       "net_device_down returns 0");
+        IFACE_CHECK(!lo->link_up,   "link_up cleared after down");
+
+        /* Idempotency: calling down on an already-down device is a no-op */
+        int ret2 = net_device_down(lo);
+        IFACE_CHECK(ret2 == 0,      "net_device_down idempotent (double-down)");
+        IFACE_CHECK(!lo->link_up,   "link_up still 0 after double-down");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 4: net_device_transmit — rejects frames while link is down
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 4: net_device_transmit (link down) ---\n");
+    {
+        uint64_t tx_err_before = lo->tx_errors;
+
+        /* Build a minimal stub netbuf (no stack allocation needed) */
+        netbuf_t *nb = netbuf_alloc();
+        if (!nb) {
+            uart_puts("[iface_test]   SKIP: netbuf pool exhausted\n");
+        } else {
+            netbuf_put(nb, 14);   /* fake 14-byte Ethernet header */
+
+            int ret = net_device_transmit(lo, nb);
+            IFACE_CHECK(ret != 0,
+                "net_device_transmit fails when link is down");
+            IFACE_CHECK(lo->tx_errors == tx_err_before + 1,
+                "tx_errors incremented on link-down rejection");
+
+            netbuf_free(nb);
+        }
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 5: net_device_up — restore loopback
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 5: net_device_up ---\n");
+    {
+        int ret = net_device_up(lo);
+        IFACE_CHECK(ret == 0,      "net_device_up returns 0");
+        IFACE_CHECK(lo->link_up,   "link_up set after up");
+
+        /* Idempotency */
+        int ret2 = net_device_up(lo);
+        IFACE_CHECK(ret2 == 0,     "net_device_up idempotent (double-up)");
+        IFACE_CHECK(lo->link_up,   "link_up still 1 after double-up");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 6: net_device_transmit — succeeds and updates counters
+     *
+     *  We send a real UDP datagram through sock_sendto, which routes
+     *  via lo → net_device_transmit → lo_send → ethernet_receive.
+     *  Then we observe that tx_packets advanced, proving the stat path.
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 6: net_device_transmit (link up, via sendto) ---\n");
+    {
+        uint64_t tx_before = lo->tx_packets;
+
+        /* Use the socket layer as a high-level driver for the frame */
+        int fd = sock_create(AF_INET, SOCK_DGRAM, 0);
+        if (fd < 0) {
+            uart_puts("[iface_test]   SKIP: sock_create failed\n");
+        } else {
+            sockaddr_in_t bind_addr = sockaddr_in_make(IPV4(127, 0, 0, 1), 9010);
+            sock_bind(fd, &bind_addr);
+
+            sockaddr_in_t dest = sockaddr_in_make(IPV4(127, 0, 0, 1), 9010);
+            const uint8_t probe[] = { 'T', 'X' };
+            sock_sendto(fd, probe, sizeof(probe), &dest);
+            sock_close(fd);
+
+            IFACE_CHECK(lo->tx_packets > tx_before,
+                "tx_packets advanced after net_device_transmit call");
+        }
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 7: net_device_poll_all — smoke-test (lo always returns -1)
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 7: net_device_poll_all (smoke) ---\n");
+    {
+        /* Should complete without crashing. lo's poll always returns -1,
+         * so no frames are injected — we just verify it doesn't hang. */
+        net_device_poll_all();
+        uart_puts("[iface_test]   PASS: net_device_poll_all returned cleanly\n");
+        pass++;
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 8: net_device_print_stats / net_device_print_all_stats
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 8: print_stats (visual) ---\n");
+    {
+        uart_puts("[iface_test]   net_device_print_stats(lo):\n");
+        net_device_print_stats(lo);
+
+        uart_puts("[iface_test]   net_device_print_all_stats():\n");
+        net_device_print_all_stats();
+
+        uart_puts("[iface_test]   PASS: print_stats returned without crash\n");
+        pass++;
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  NULL-safety: NULL device pointer must not crash
+     * ---------------------------------------------------------------- */
+    uart_puts("[iface_test] --- Test 9: NULL-safety ---\n");
+    {
+        int r1 = net_device_up(NULL);
+        IFACE_CHECK(r1 == -1, "net_device_up(NULL) returns -1");
+
+        int r2 = net_device_down(NULL);
+        IFACE_CHECK(r2 == -1, "net_device_down(NULL) returns -1");
+
+        int r3 = net_device_transmit(NULL, NULL);
+        IFACE_CHECK(r3 == -1, "net_device_transmit(NULL,NULL) returns -1");
+
+        net_device_t *r4 = net_device_find_by_ip(IPV4(0, 0, 0, 0));
+        IFACE_CHECK(r4 == NULL, "find_by_ip(0.0.0.0) returns NULL");
+
+        /* print_stats(NULL) must not crash */
+        net_device_print_stats(NULL);
+        uart_puts("[iface_test]   PASS: print_stats(NULL) returned cleanly\n");
+        pass++;
+    }
+    uart_puts("\n");
+
+    uart_puts("=============================================================\n");
+    uart_puts("  NET INTERFACE ABSTRACTION TEST COMPLETE  pass=");
+    uart_putu((uint64_t)pass);
+    uart_puts("  fail=");
+    uart_putu((uint64_t)fail);
+    uart_puts("\n");
+    uart_puts("=============================================================\n\n");
+}

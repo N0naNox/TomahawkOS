@@ -17,6 +17,7 @@
 
 #include "include/net.h"
 #include "include/net_device.h"
+#include "include/ethernet.h"
 #include "include/arp.h"
 #include "include/udp.h"
 #include "include/loopback.h"
@@ -190,6 +191,251 @@ void net_device_set_ip(net_device_t *dev,
 }
 
 /* ====================================================================
+ *  Interface lifecycle
+ * ==================================================================== */
+
+int net_device_up(net_device_t *dev)
+{
+    if (!dev) return -1;
+    if (dev->link_up) return 0;   /* already up — idempotent */
+
+    if (dev->ops && dev->ops->start) {
+        int ret = dev->ops->start(dev);
+        if (ret != 0) {
+            uart_puts("[net] net_device_up failed for ");
+            uart_puts(dev->name);
+            uart_puts(": err=");
+            uart_putu((uint64_t)(uint32_t)-ret);
+            uart_puts("\n");
+            return ret;
+        }
+    }
+
+    dev->link_up = 1;
+
+    uart_puts("[net] ");
+    uart_puts(dev->name);
+    uart_puts(": interface UP\n");
+    return 0;
+}
+
+int net_device_down(net_device_t *dev)
+{
+    if (!dev) return -1;
+    if (!dev->link_up) return 0;  /* already down — idempotent */
+
+    if (dev->ops && dev->ops->stop) {
+        int ret = dev->ops->stop(dev);
+        if (ret != 0) {
+            uart_puts("[net] net_device_down failed for ");
+            uart_puts(dev->name);
+            uart_puts(": err=");
+            uart_putu((uint64_t)(uint32_t)-ret);
+            uart_puts("\n");
+            return ret;
+        }
+    }
+
+    dev->link_up = 0;
+
+    uart_puts("[net] ");
+    uart_puts(dev->name);
+    uart_puts(": interface DOWN\n");
+    return 0;
+}
+
+/* ====================================================================
+ *  Raw transmit
+ * ==================================================================== */
+
+int net_device_transmit(net_device_t *dev, netbuf_t *nb)
+{
+    if (!dev || !nb) return -1;
+
+    if (!dev->link_up) {
+        dev->tx_errors++;
+        return -1;
+    }
+
+    if (!dev->ops || !dev->ops->send) {
+        dev->tx_errors++;
+        return -1;
+    }
+
+    int ret = dev->ops->send(dev, nb);
+    if (ret == 0) {
+        dev->tx_packets++;
+        dev->tx_bytes += nb->len;
+    } else {
+        dev->tx_errors++;
+    }
+    return ret;
+}
+
+/* ====================================================================
+ *  Receive pump
+ * ==================================================================== */
+
+void net_device_poll_all(void)
+{
+    netbuf_t *nb = netbuf_alloc();
+    if (!nb) return;   /* pool exhausted — nothing we can do */
+
+    for (int i = 0; i < device_count; i++) {
+        net_device_t *dev = registered_devices[i];
+
+        if (!dev->link_up || !dev->ops || !dev->ops->poll)
+            continue;
+
+        /*
+         * Drain the device: poll() fills `nb` and returns 0 when a frame
+         * is available, or -1 when the device queue is empty.
+         * We loop until the queue is empty so burst arrivals are handled
+         * in a single call rather than waiting for the next tick.
+         */
+        for (;;) {
+            netbuf_reset(nb);
+            nb->dev = dev;
+
+            if (dev->ops->poll(dev, nb) != 0)
+                break;   /* no more frames on this device */
+
+            /*
+             * Hand the frame to the Ethernet demux layer.
+             * ethernet_receive() updates rx_packets / rx_bytes itself,
+             * so we must NOT do it here to avoid double-counting.
+             */
+            ethernet_receive(dev, nb);
+        }
+    }
+
+    netbuf_free(nb);
+}
+
+/* ====================================================================
+ *  Routing helpers
+ * ==================================================================== */
+
+net_device_t *net_device_find_by_ip(ipv4_addr_t ip)
+{
+    for (int i = 0; i < device_count; i++) {
+        if (ipv4_equal(registered_devices[i]->ip, ip))
+            return registered_devices[i];
+    }
+    return NULL;
+}
+
+net_device_t *net_device_route(ipv4_addr_t dst_ip)
+{
+    net_device_t *fallback = NULL;
+
+    for (int i = 0; i < device_count; i++) {
+        net_device_t *dev = registered_devices[i];
+
+        if (!dev->link_up) continue;
+
+        /*
+         * Check if dst_ip is within this device's subnet.
+         * Uses a bitwise AND of both addresses with the device's netmask.
+         */
+        if ((dst_ip.addr & dev->netmask.addr) ==
+            (dev->ip.addr  & dev->netmask.addr)) {
+            return dev;   /* on-link: best possible match */
+        }
+
+        /* Track any device that has a configured default gateway */
+        if (!ipv4_equal(dev->gateway, IPV4_ZERO))
+            fallback = dev;
+    }
+
+    /* Off-link: use the device with a gateway (default route) */
+    return fallback ? fallback : net_device_get_default();
+}
+
+/* ====================================================================
+ *  Diagnostics
+ * ==================================================================== */
+
+/** Print a 4-byte IPv4 address as dotted-decimal to UART. */
+static void print_ipv4(ipv4_addr_t ip)
+{
+    uart_putu(ip.bytes[0]); uart_puts(".");
+    uart_putu(ip.bytes[1]); uart_puts(".");
+    uart_putu(ip.bytes[2]); uart_puts(".");
+    uart_putu(ip.bytes[3]);
+}
+
+/** Print a 6-byte MAC address as hex octets separated by ':' to UART. */
+static void print_mac(mac_addr_t mac)
+{
+    for (int i = 0; i < 6; i++) {
+        /* Print each byte as exactly 2 hex digits */
+        uint8_t b = mac.bytes[i];
+        uint8_t hi = b >> 4;
+        uint8_t lo = b & 0x0F;
+        char hex[3];
+        hex[0] = (char)(hi < 10 ? '0' + hi : 'a' + hi - 10);
+        hex[1] = (char)(lo < 10 ? '0' + lo : 'a' + lo - 10);
+        hex[2] = '\0';
+        uart_puts(hex);
+        if (i < 5) uart_puts(":");
+    }
+}
+
+void net_device_print_stats(net_device_t *dev)
+{
+    if (!dev) return;
+
+    uart_puts("  [iface] ");
+    uart_puts(dev->name);
+    uart_puts("  link=");
+    uart_puts(dev->link_up ? "UP" : "DOWN");
+
+    uart_puts("  ip=");
+    print_ipv4(dev->ip);
+
+    uart_puts("/");
+    /* Print netmask as CIDR prefix length */
+    uint32_t nm = dev->netmask.addr;
+    int prefix = 0;
+    for (int b = 31; b >= 0; b--) {
+        if (nm & (1u << b)) prefix++;
+        else break;
+    }
+    uart_putu((uint64_t)prefix);
+
+    uart_puts("  gw=");
+    print_ipv4(dev->gateway);
+
+    uart_puts("  mac=");
+    print_mac(dev->mac);
+
+    uart_puts("\n");
+
+    uart_puts("         tx_pkt="); uart_putu(dev->tx_packets);
+    uart_puts("  tx_bytes=");      uart_putu(dev->tx_bytes);
+    uart_puts("  tx_err=");        uart_putu(dev->tx_errors);
+    uart_puts("\n");
+
+    uart_puts("         rx_pkt="); uart_putu(dev->rx_packets);
+    uart_puts("  rx_bytes=");      uart_putu(dev->rx_bytes);
+    uart_puts("  rx_err=");        uart_putu(dev->rx_errors);
+    uart_puts("\n");
+}
+
+void net_device_print_all_stats(void)
+{
+    uart_puts("[net] network interface statistics:\n");
+    if (device_count == 0) {
+        uart_puts("  (no devices registered)\n");
+        return;
+    }
+    for (int i = 0; i < device_count; i++) {
+        net_device_print_stats(registered_devices[i]);
+    }
+}
+
+/* ====================================================================
  *  Network stack initialisation
  * ==================================================================== */
 
@@ -218,6 +464,9 @@ void net_init(void)
 
     /* 5. Socket layer */
     socket_init();
+
+    /* 6. Print the interface table so it appears in the boot serial log */
+    net_device_print_all_stats();
 
     uart_puts("[net] Network stack architecture initialised.\n");
 }
