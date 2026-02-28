@@ -15,6 +15,10 @@
 #include "include/shell_fs_cmd.h"
 #include "include/demos.h"
 #include "include/init_config.h"
+#include "include/udp.h"
+#include "include/net_device.h"
+#include "include/net_rx.h"
+#include "include/net.h"
 #include <uart.h>
 #include <stddef.h>
 
@@ -572,6 +576,88 @@ static void cmd_chmod(const char *args) {
     }
 }
 
+/* ========== udpsend ========== */
+
+/**
+ * @brief Send a single UDP datagram over the default NIC.
+ *
+ * Usage: udpsend <ip> <port> <message>
+ * Example: udpsend 10.0.2.2 9 hello
+ */
+static void cmd_udpsend(const char *args)
+{
+    if (!args || *args == '\0') {
+        vga_write("usage: udpsend <ip> <port> <message>\n");
+        return;
+    }
+
+    /* Parse destination IP: a.b.c.d */
+    const char *p = skip_spaces(args);
+    uint8_t ip[4] = {0};
+    for (int i = 0; i < 4; i++) {
+        uint32_t v = 0;
+        while (*p >= '0' && *p <= '9') { v = v * 10 + (uint32_t)(*p - '0'); p++; }
+        ip[i] = (uint8_t)v;
+        if (i < 3) { if (*p == '.') p++; else { vga_write("udpsend: bad IP\n"); return; } }
+    }
+    if (*p != ' ' && *p != '\t') { vga_write("udpsend: bad IP\n"); return; }
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* Parse destination port */
+    uint32_t port = 0;
+    while (*p >= '0' && *p <= '9') { port = port * 10 + (uint32_t)(*p - '0'); p++; }
+    if (port == 0 || port > 65535) { vga_write("udpsend: bad port\n"); return; }
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* Remainder is the message */
+    const char *msg = p;
+    uint16_t msg_len = 0;
+    while (msg[msg_len]) msg_len++;
+    if (msg_len == 0) { vga_write("udpsend: empty message\n"); return; }
+
+    /* Get the default NIC (eth0 if available, else lo) */
+    net_device_t *dev = net_device_get_by_name("eth0");
+    if (!dev) dev = net_device_get_by_name("lo");
+    if (!dev) { vga_write("udpsend: no NIC available\n"); return; }
+
+    ipv4_addr_t dst = {{ip[0], ip[1], ip[2], ip[3]}};
+
+    /* udp_send may fail on the first try because ipv4_send fires an ARP
+     * request and immediately returns -1 (async ARP).  Poll the NIC to
+     * process the ARP reply, then retry up to 5 times. */
+    int rc = -1;
+    for (int attempt = 0; attempt < 5 && rc != 0; attempt++) {
+        rc = udp_send(dev, dst,
+                      49152u,          /* ephemeral source port */
+                      (uint16_t)port,
+                      (const void *)msg, msg_len);
+        if (rc != 0) {
+            /* Pump the RX ring so the ARP reply can arrive */
+            for (int i = 0; i < 50000; i++) {
+                net_device_poll_all();
+                net_rx_process();
+            }
+        }
+    }
+
+    if (rc == 0) {
+        vga_write("udpsend: sent ");
+        /* simple decimal print of msg_len */
+        char nbuf[8];
+        int ni = 0;
+        uint16_t tmp = msg_len;
+        if (tmp == 0) { nbuf[ni++] = '0'; }
+        else { while (tmp > 0) { nbuf[ni++] = (char)('0' + tmp % 10); tmp /= 10; } }
+        /* reverse */
+        for (int a = 0, b = ni-1; a < b; a++, b--) { char c = nbuf[a]; nbuf[a] = nbuf[b]; nbuf[b] = c; }
+        nbuf[ni] = '\0';
+        vga_write(nbuf);
+        vga_write(" bytes\n");
+    } else {
+        vga_write("udpsend: send failed\n");
+    }
+}
+
 /* ========== Main dispatcher ========== */
 
 /**
@@ -639,6 +725,10 @@ int shell_fs_dispatch(const char *cmdline) {
     }
     if (strcmp(cmd, "chmod") == 0) {
         cmd_chmod(args);
+        return 0;
+    }
+    if (strcmp(cmd, "udpsend") == 0) {
+        cmd_udpsend(args);
         return 0;
     }
 

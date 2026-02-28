@@ -1382,6 +1382,9 @@ void run_tomahawk_shell(void) {
         "  tests     - Run kernel unit tests\n"
         "  forkwait  - Run fork-exec-wait demo\n"
         "  jobdemo   - Run job control demo\n"
+        "  udpsend <ip> <port> <msg> - Send a UDP datagram over eth0\n"
+        "                 e.g.  udpsend 10.0.2.2 9 hello\n"
+        "                       udpsend 8.8.8.8 53 test\n"
         "  exit      - Exit shell and return to kernel\n\n")
     /* Build prompts dynamically from init.conf (hostname= and username=) */
     const char *_cfg_host = init_config_get("hostname");

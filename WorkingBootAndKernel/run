@@ -16,13 +16,14 @@ if [ ! -f ./build/fat32test.img ]; then
 fi
 
 qemu-system-x86_64 \
-	-no-reboot -no-shutdown \
-	-bios OVMF.fd \
-	-drive if=none,id=uas-disk1,file=./build/kernel.img,format=raw \
-	-device usb-storage,drive=uas-disk1 \
-	-drive file=./build/fat32test.img,format=raw,if=ide,index=0,media=disk \
-	-serial stdio \
-	-usb \
-	-net none \
-	-vga std \
-	-device isa-debug-exit,iobase=0xf4,iosize=0x04
+    -no-reboot -no-shutdown \
+    -bios OVMF.fd \
+    -drive if=none,id=uas-disk1,file=./build/kernel.img,format=raw \
+    -device usb-storage,drive=uas-disk1 \
+    -drive file=./build/fat32test.img,format=raw,if=ide,index=0,media=disk \
+    -serial stdio \
+    -usb \
+    -netdev user,id=n0,hostfwd=udp::4444-:4444 \
+    -device e1000,netdev=n0 \
+    -vga std \
+    -device isa-debug-exit,iobase=0xf4,iosize=0x04
