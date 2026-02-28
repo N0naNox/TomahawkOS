@@ -32,7 +32,9 @@
 #include "include/password_store.h"
 #include "include/mount.h"
 #include "include/init_config.h"
-#include "include/tty.h"
+#include "include/ata.h"
+#include "include/fat32.h"
+#include "include/vfs.h"
 
 /* Demo threads and helpers */
 static void demo_thread_a(void);
@@ -100,7 +102,8 @@ extern uintptr_t kernel_end;
 
 
 /**
- * @brief Write text to the framebuffer
+ * @brief Write text to the framebuffer (for early boot messages before VGA init)
+ * Uses scale-1 (8x16) font since vga_init_fb hasn't run yet.
  */
 void write_text(volatile uint32_t* fb, uint32_t pitch, uint32_t width, uint32_t height,
                 const char* text, uint32_t x, uint32_t y)
@@ -135,7 +138,18 @@ void kernel_main(Boot_Info* boot_info)
 	idt_install();
 	
 	/* Set up kernel's PML4 and switch to it */
-	g_kernel_pml4 = paging_setup_kernel_pml4();
+	{
+		uintptr_t fb_paddr = (uintptr_t)boot_info->video_mode_info.framebuffer_pointer;
+		size_t    fb_size  = (size_t)boot_info->video_mode_info.framebuffer_size;
+		/* If bootloader didn't report size, estimate from resolution */
+		if (fb_size == 0 && boot_info->video_mode_info.horizontal_resolution > 0) {
+			fb_size = (size_t)boot_info->video_mode_info.pixels_per_scaline *
+			          (size_t)boot_info->video_mode_info.vertical_resolution * 4;
+		}
+		/* Minimum 4 MiB for safety */
+		if (fb_size < 4 * 1024 * 1024) fb_size = 4 * 1024 * 1024;
+		g_kernel_pml4 = paging_setup_kernel_pml4(fb_paddr, fb_size);
+	}
 	if (!g_kernel_pml4) {
 		const char* err = "ERROR: Failed to create kernel PML4\n";
 		for (int i = 0; err[i]; i++) {
@@ -214,6 +228,32 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	/* Populate root filesystem with standard directories and files */
 	fs_populate_root();
 
+	/* Auto-mount FAT32 from ATA drive for persistent storage */
+	{
+		uart_puts("[BOOT] Initializing ATA for persistent storage...\n");
+		ata_init();
+		struct block_device *fat_dev = ata_get_block_device(0);
+		if (fat_dev) {
+			/* Create /mnt and /mnt/fat in ramfs */
+			struct vnode *root = vfs_get_root();
+			if (root) {
+				struct vnode *mnt_dir = vfs_mkdir_ramfs(root, "mnt");
+				if (mnt_dir) vfs_mkdir_ramfs(mnt_dir, "fat");
+			}
+			fat32_register();
+			if (do_mount("/mnt/fat", "fat32", fat_dev, 0) == 0) {
+				uart_puts("[BOOT] FAT32 auto-mounted at /mnt/fat\n");
+			} else {
+				uart_puts("[BOOT] WARNING: FAT32 auto-mount failed\n");
+			}
+		} else {
+			uart_puts("[BOOT] No ATA disk found, skipping FAT32 mount\n");
+		}
+	}
+
+	/* Now that FAT32 is mounted, load persisted users from /mnt/fat/SHADOW.DAT */
+	password_store_load_shadow();
+
 	/* Register the initrd memory region so init_config_load() can find
 	 * /etc/init.conf directly in the cpio archive without going through VFS. */
 	if (boot_info->initrd_base != 0 && boot_info->initrd_size > 0) {
@@ -284,9 +324,6 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	timer_install();
 
 	keyboard_init();
-
-	/* Initialize TTY subsystem (console line discipline) */
-	tty_init();
 
 	scheduler_init();
 

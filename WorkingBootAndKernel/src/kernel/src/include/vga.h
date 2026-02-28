@@ -1,7 +1,7 @@
 /*
  * vga.h - Minimal VGA text-mode driver API
  * - simple functions for boot/kernel text output
- * - writes to VGA memory at 0xB8000 (text mode)
+ * - writes to GOP framebuffer with scalable font
  * - no dynamic allocation, freestanding-friendly
  */
 
@@ -10,9 +10,17 @@
 
 #include <stdint.h>
 
-/* VGA text dimensions */
-#define VGA_WIDTH 80
-#define VGA_HEIGHT 48   /* 768 pixels / 16 pixels per row = 48 rows */
+/*
+ * VGA text dimensions are now computed at runtime based on actual
+ * framebuffer resolution and chosen font scale.
+ * Use vga_get_dimensions() to query current cols/rows.
+ */
+extern int vga_cols;   /* number of text columns */
+extern int vga_rows;   /* number of text rows    */
+
+/* Legacy macros — redirect to the runtime variables */
+#define VGA_WIDTH  vga_cols
+#define VGA_HEIGHT vga_rows
 
 /* VGA color constants */
 enum vga_color {
@@ -58,17 +66,11 @@ void vga_get_cursor(int* row, int* col);
 /* Set current text colors (bg and fg are vga_color values) */
 void vga_set_color(uint8_t bg, uint8_t fg);
 
-/* Draw an underline cursor at the current position */
-void vga_draw_cursor(void);
+/* Get current font scale factor (1, 2, or 3) */
+uint32_t vga_get_font_scale(void);
 
-/* Erase the cursor at the current position */
-void vga_erase_cursor(void);
-
-/* Clear a character cell at given row/col (fill with background) */
-void vga_clear_char(int row, int col);
-
-/* Draw a character at specified row/col without moving the VGA cursor */
-void vga_draw_char_at(int row, int col, char c);
+/* Get text grid dimensions */
+void vga_get_dimensions(int* cols, int* rows);
 
 #endif /* VGA_H */
 

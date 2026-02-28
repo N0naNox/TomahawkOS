@@ -14,7 +14,6 @@
 #include "include/shell_fs_cmd.h"
 #include "include/vfs.h"
 #include "include/vnode.h"
-#include "include/tty.h"
 #include "uart.h"
 
 /* External saved context from usermode demo */
@@ -152,8 +151,25 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_WRITE:
             /* arg1 = string pointer, arg2 = length */
+            /* Debug: print addr and len via UART */
+            uart_puts("[SYS_WRITE] str=0x");
+            uart_puthex((uint64_t)arg1);
+            uart_puts(" len=");
+            uart_putu((uint64_t)arg2);
+            uart_puts("\n");
             if (arg1 && arg2) {
-                tty_write_n(tty_console(), (const char *)arg1, (size_t)arg2);
+                const char *str = (const char*)arg1;
+                size_t len = (size_t)arg2;
+                /* Debug: print first few bytes in hex */
+                uart_puts("  first bytes: ");
+                for (size_t i = 0; i < 8 && i < len; i++) {
+                    uart_puthex((uint8_t)str[i]);
+                    uart_puts(" ");
+                }
+                uart_puts("\n");
+                for (size_t i = 0; i < len; i++) {
+                    vga_putc(str[i]);
+                }
             }
             return 0;
 
@@ -188,21 +204,25 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_PUTCHAR:
             /* arg1 = character to print */
-            tty_putc(tty_console(), (char)arg1);
+            vga_putc((char)arg1);
             return 0;
 
         case SYS_GETUID: {
-            /* Return UID from the current process PCB */
+            /* Return UID from the current process PCB.
+             * Sign-extend so UID -1 (not logged in) is negative in 64-bit. */
             pcb_t *_p = get_current_process();
-            return _p ? (uint64_t)_p->uid : 0;
+            return _p ? (uint64_t)(int64_t)(int32_t)_p->uid : (uint64_t)(int64_t)-1;
         }
 
         case SYS_SETUID: {
-            /* Only root (UID 0) may set an arbitrary UID.
-             * Non-root processes can only keep their own UID (no-op). */
+            /* Root (UID 0) may set any UID.
+             * Guest (UID -1 / not logged in) may set any UID (login).
+             * Any user may set UID to -1 (logout).
+             * Any user may keep their own UID (no-op). */
             pcb_t *_p = get_current_process();
             if (!_p) return (uint64_t)-1;
-            if (_p->uid != 0 && _p->uid != (uint32_t)arg1) {
+            if (_p->uid != 0 && _p->uid != (uint32_t)-1 &&
+                (uint32_t)arg1 != (uint32_t)-1 && _p->uid != (uint32_t)arg1) {
                 uart_puts("[SHELL] SYS_SETUID: permission denied\n");
                 return (uint64_t)-1;  /* EPERM */
             }
@@ -230,8 +250,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return (uint64_t)password_store_get_username(shell_current_uid, (char*)arg1, (int)arg2);
 
         case SYS_CLEAR_SCREEN:
-            /* Clear the screen via TTY */
-            tty_clear(tty_console());
+            /* Clear the VGA screen */
+            vga_clear(0, 7);  /* black background, light grey text */
             return 0;
 
         case SYS_SHELL_EXIT:
@@ -397,43 +417,47 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_FAT32_MOUNT:
             uart_puts("[SYSCALL] SYS_FAT32_MOUNT (50) reached\n");
-            shell_fat32_mount();
+            shell_fat32_mount((const char *)arg1);
             return 0;
 
         case SYS_FAT32_UMOUNT:
-            shell_fat32_umount();
+            shell_fat32_umount((const char *)arg1);
             return 0;
 
         case SYS_FAT32_LS:
-            shell_fat32_ls();
+            shell_fat32_ls((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CAT:
-            shell_fat32_cat();
+            shell_fat32_cat((const char *)arg1);
             return 0;
 
         case SYS_FAT32_WRITE:
-            shell_fat32_write();
+            shell_fat32_write((const char *)arg1);
             return 0;
 
         case SYS_FAT32_MKDIR:
-            shell_fat32_mkdir();
+            shell_fat32_mkdir((const char *)arg1);
             return 0;
 
         case SYS_FAT32_RM:
-            shell_fat32_rm();
+            shell_fat32_rm((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CD:
-            shell_fat32_cd();
+            shell_fat32_cd((const char *)arg1);
             return 0;
 
         case SYS_FAT32_RENAME:
-            shell_fat32_rename();
+            shell_fat32_rename((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CHMOD:
-            shell_fat32_chmod();
+            shell_fat32_chmod((const char *)arg1);
+            return 0;
+
+        case SYS_FAT32_TOUCH:
+            shell_fat32_touch((const char *)arg1);
             return 0;
 
         case 99:
@@ -459,11 +483,6 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                 );
             }
             return 0;
-
-        case SYS_READLINE:
-            /* Line editing with cursor, arrows, history — delegated to TTY */
-            /* arg1 = buffer pointer,  arg2 = max length (including NUL) */
-            return (uint64_t)tty_readline(tty_console(), (char *)arg1, (int)arg2);
 
         default:
             uart_puts("[KERNEL] Unknown syscall: ");
