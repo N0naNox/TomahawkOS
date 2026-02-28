@@ -305,6 +305,9 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	/* Run RX packet path self-test (ring enqueue/process/drop) */
 	net_rx_path_test();
 
+	/* Run TX packet path self-test (deferred ring enqueue/flush/drop) */
+	net_tx_path_test();
+
 	scheduler_init();
 
 	/* Create essential threads */

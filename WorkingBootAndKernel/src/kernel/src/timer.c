@@ -3,6 +3,7 @@
 #include "hal_port_io.h"
 #include "scheduler.h"
 #include "include/net_rx.h"
+#include "include/net_tx.h"
 #include <stdint.h>
 #include <uart.h>
 
@@ -61,6 +62,13 @@ void timer_irq_handler(regs_t* r) {
      * latency at 1000 Hz, or ~10 ms at the default 100 Hz PIT rate.
      */
     net_rx_process();
+
+    /*
+     * Deferred TX flush.
+     * Drains the global TX ring and calls net_device_transmit() on
+     * each queued frame.  Symmetric with net_rx_process() above.
+     */
+    net_tx_flush();
 
     /* Preemptive round robin: trigger scheduler */
     scheduler_tick(r);
