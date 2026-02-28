@@ -66,8 +66,9 @@ static inline void paging_load_cr3(uintptr_t pml4_phys) {
 void paging_free_pml4(uintptr_t pml4_phys);
 
 /* Set up kernel PML4 with identity mappings for kernel code, early I/O, and framebuffer.
+   fb_paddr and fb_size specify the GOP framebuffer region to map.
    Returns physical address of kernel PML4, or 0 on failure. */
-uintptr_t paging_setup_kernel_pml4(void);
+uintptr_t paging_setup_kernel_pml4(uintptr_t fb_paddr, size_t fb_size);
 
 /* Remove the temporary identity mapping of the kernel after jumping to higher-half */
 void paging_remove_kernel_identity_map(uintptr_t pml4_phys);

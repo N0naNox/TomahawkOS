@@ -40,15 +40,16 @@ void run_job_control_demo(void);
 void run_fat32_demo(void);
 
 /* FAT32 shell commands - individual operations */
-void shell_fat32_mount(void);
-void shell_fat32_umount(void);
-void shell_fat32_ls(void);
-void shell_fat32_cat(void);
-void shell_fat32_write(void);
-void shell_fat32_mkdir(void);
-void shell_fat32_rm(void);
-void shell_fat32_cd(void);
-void shell_fat32_rename(void);
-void shell_fat32_chmod(void);
+void shell_fat32_mount(const char *cmdline);
+void shell_fat32_umount(const char *cmdline);
+void shell_fat32_ls(const char *cmdline);
+void shell_fat32_cat(const char *cmdline);
+void shell_fat32_write(const char *cmdline);
+void shell_fat32_mkdir(const char *cmdline);
+void shell_fat32_rm(const char *cmdline);
+void shell_fat32_cd(const char *cmdline);
+void shell_fat32_rename(const char *cmdline);
+void shell_fat32_chmod(const char *cmdline);
+void shell_fat32_touch(const char *cmdline);
 
 #endif /* DEMOS_H */

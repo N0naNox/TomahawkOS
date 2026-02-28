@@ -19,6 +19,12 @@
 void password_store_init(void);
 
 /**
+ * @brief Load users from /etc/shadow (VFS).
+ * Call after filesystem is mounted to pick up persisted registrations.
+ */
+void password_store_load_shadow(void);
+
+/**
  * @brief Store a new user or update existing user's password hash
  * @param username The username (max 31 chars + null terminator)
  * @param password The plaintext password to hash and store

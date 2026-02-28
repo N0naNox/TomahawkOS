@@ -62,5 +62,7 @@
 #define SYS_FAT32_RENAME 58
 #define SYS_FAT32_CHMOD  59
 
+#define SYS_FAT32_TOUCH 61
+
 /* WAITPID */
 #define SYS_WAITPID 60

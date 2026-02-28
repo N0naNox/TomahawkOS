@@ -32,6 +32,7 @@ typedef struct s_boot_video_info {
 	UINT32 horizontal_resolution;
 	UINT32 vertical_resolution;
 	UINT32 pixels_per_scaline;
+	UINT64 framebuffer_size;   /* total bytes of the framebuffer */
 } Kernel_Boot_Video_Mode_Info;
 
 /**

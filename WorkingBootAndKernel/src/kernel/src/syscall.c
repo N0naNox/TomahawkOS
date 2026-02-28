@@ -208,17 +208,21 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         case SYS_GETUID: {
-            /* Return UID from the current process PCB */
+            /* Return UID from the current process PCB.
+             * Sign-extend so UID -1 (not logged in) is negative in 64-bit. */
             pcb_t *_p = get_current_process();
-            return _p ? (uint64_t)_p->uid : 0;
+            return _p ? (uint64_t)(int64_t)(int32_t)_p->uid : (uint64_t)(int64_t)-1;
         }
 
         case SYS_SETUID: {
-            /* Only root (UID 0) may set an arbitrary UID.
-             * Non-root processes can only keep their own UID (no-op). */
+            /* Root (UID 0) may set any UID.
+             * Guest (UID -1 / not logged in) may set any UID (login).
+             * Any user may set UID to -1 (logout).
+             * Any user may keep their own UID (no-op). */
             pcb_t *_p = get_current_process();
             if (!_p) return (uint64_t)-1;
-            if (_p->uid != 0 && _p->uid != (uint32_t)arg1) {
+            if (_p->uid != 0 && _p->uid != (uint32_t)-1 &&
+                (uint32_t)arg1 != (uint32_t)-1 && _p->uid != (uint32_t)arg1) {
                 uart_puts("[SHELL] SYS_SETUID: permission denied\n");
                 return (uint64_t)-1;  /* EPERM */
             }
@@ -413,43 +417,47 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_FAT32_MOUNT:
             uart_puts("[SYSCALL] SYS_FAT32_MOUNT (50) reached\n");
-            shell_fat32_mount();
+            shell_fat32_mount((const char *)arg1);
             return 0;
 
         case SYS_FAT32_UMOUNT:
-            shell_fat32_umount();
+            shell_fat32_umount((const char *)arg1);
             return 0;
 
         case SYS_FAT32_LS:
-            shell_fat32_ls();
+            shell_fat32_ls((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CAT:
-            shell_fat32_cat();
+            shell_fat32_cat((const char *)arg1);
             return 0;
 
         case SYS_FAT32_WRITE:
-            shell_fat32_write();
+            shell_fat32_write((const char *)arg1);
             return 0;
 
         case SYS_FAT32_MKDIR:
-            shell_fat32_mkdir();
+            shell_fat32_mkdir((const char *)arg1);
             return 0;
 
         case SYS_FAT32_RM:
-            shell_fat32_rm();
+            shell_fat32_rm((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CD:
-            shell_fat32_cd();
+            shell_fat32_cd((const char *)arg1);
             return 0;
 
         case SYS_FAT32_RENAME:
-            shell_fat32_rename();
+            shell_fat32_rename((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CHMOD:
-            shell_fat32_chmod();
+            shell_fat32_chmod((const char *)arg1);
+            return 0;
+
+        case SYS_FAT32_TOUCH:
+            shell_fat32_touch((const char *)arg1);
             return 0;
 
         case 99:

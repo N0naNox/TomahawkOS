@@ -1,10 +1,14 @@
 /**
  * @file password_store.c
- * @brief Password hash storage implementation - stores credentials as SHA256 hashes in RAM
+ * @brief Password hash storage implementation - stores credentials as SHA256 hashes
+ *        backed by /etc/shadow on the VFS for persistence across reboots.
  */
 
 #include "include/password_store.h"
 #include "include/string.h"
+#include "include/vfs.h"
+#include "include/vnode.h"
+#include "include/inode.h"
 #include "uart.h"
 
 /* Define LONESHA256_STATIC so the implementation is included here */
@@ -55,6 +59,187 @@ static int find_user(const char* username) {
     return -1;
 }
 
+/* ---- Hex encoding / decoding helpers ---- */
+
+static const char hex_chars[] = "0123456789abcdef";
+
+/* Encode raw hash bytes to a 64-char hex string (no null terminator added) */
+static void hash_to_hex(const uint8_t hash[SHA256_HASH_SIZE], char *out) {
+    for (int i = 0; i < SHA256_HASH_SIZE; i++) {
+        out[i * 2]     = hex_chars[(hash[i] >> 4) & 0xF];
+        out[i * 2 + 1] = hex_chars[ hash[i]       & 0xF];
+    }
+}
+
+/* Decode a single hex digit, returns 0-15 or -1 on error */
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Decode a 64-char hex string into 32 raw bytes. Returns 0 on success, -1 on error */
+static int hex_to_hash(const char *hex, uint8_t out[SHA256_HASH_SIZE]) {
+    for (int i = 0; i < SHA256_HASH_SIZE; i++) {
+        int hi = hex_digit(hex[i * 2]);
+        int lo = hex_digit(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return 0;
+}
+
+/* ---- VFS-backed persistence ---- */
+
+#define SHADOW_PATH "/mnt/fat/SHADOW.DAT"
+
+/* Save all current users to the persistent FAT32 shadow file */
+static void save_shadow(void) {
+    /* Build the file content in a static buffer */
+    static char buf[8192];
+    int pos = 0;
+
+    /* Write each used entry */
+    for (int i = 0; i < MAX_USERS && pos < (int)sizeof(buf) - 128; i++) {
+        if (!user_db[i].used) continue;
+
+        /* username */
+        for (int j = 0; user_db[i].username[j]; j++)
+            buf[pos++] = user_db[i].username[j];
+
+        buf[pos++] = ':';
+
+        /* hex hash */
+        char hex[SHA256_HASH_SIZE * 2];
+        hash_to_hex(user_db[i].password_hash, hex);
+        for (int j = 0; j < SHA256_HASH_SIZE * 2; j++)
+            buf[pos++] = hex[j];
+
+        buf[pos++] = '\n';
+    }
+
+    /* Write to persistent FAT32 file */
+    struct vnode *vp = NULL;
+    if (vfs_resolve_path(SHADOW_PATH, &vp) != 0 || !vp) {
+        /* File doesn't exist yet — create it */
+        struct vnode *parent = NULL;
+        if (vfs_resolve_path("/mnt/fat", &parent) == 0 && parent) {
+            vfs_create(parent, "SHADOW.DAT", &vp);
+        }
+    }
+    if (vp) {
+        vfs_write_at(vp, buf, (size_t)pos, 0);
+        vfs_close(vp);
+        uart_puts("[PASSWORD_STORE] Saved shadow to FAT32 (");
+        uart_putu((unsigned)pos);
+        uart_puts(" bytes)\n");
+    } else {
+        uart_puts("[PASSWORD_STORE] WARNING: Could not save to FAT32\n");
+    }
+
+    /* Also update the in-memory ramfs /etc/shadow copy */
+    struct vnode *ramfs_vp = NULL;
+    if (vfs_resolve_path("/etc/shadow", &ramfs_vp) == 0 && ramfs_vp) {
+        vfs_write_at(ramfs_vp, buf, (size_t)pos, 0);
+        vfs_close(ramfs_vp);
+    }
+}
+
+/* Load users from persistent FAT32 shadow file.
+ * Called once after the FAT32 volume is mounted. */
+void password_store_load_shadow(void) {
+    struct vnode *vp = NULL;
+
+    /* Try persistent FAT32 first */
+    if (vfs_resolve_path(SHADOW_PATH, &vp) != 0 || !vp) {
+        /* Fall back to ramfs /etc/shadow */
+        uart_puts("[PASSWORD_STORE] /mnt/fat/SHADOW.DAT not found, trying /etc/shadow\n");
+        if (vfs_resolve_path("/etc/shadow", &vp) != 0 || !vp) {
+            uart_puts("[PASSWORD_STORE] No shadow file found, keeping defaults\n");
+            return;
+        }
+    }
+
+    int64_t fsize = vfs_getsize(vp);
+    if (fsize <= 0) {
+        uart_puts("[PASSWORD_STORE] /etc/shadow is empty, keeping defaults\n");
+        vfs_close(vp);
+        return;
+    }
+    if (fsize > 8192) fsize = 8192;  /* sanity cap */
+
+    static char buf[8192];
+    int nread = vfs_read_at(vp, buf, (size_t)fsize, 0);
+    vfs_close(vp);
+    if (nread <= 0) {
+        uart_puts("[PASSWORD_STORE] Failed to read /etc/shadow\n");
+        return;
+    }
+
+    /* Clear existing DB — we rebuild entirely from the file */
+    for (int i = 0; i < MAX_USERS; i++) {
+        user_db[i].used = 0;
+        for (int j = 0; j < MAX_USERNAME_LEN; j++)
+            user_db[i].username[j] = 0;
+    }
+    user_count = 0;
+
+    /* Parse line by line */
+    int loaded = 0;
+    int pos = 0;
+    while (pos < nread && user_count < MAX_USERS) {
+        /* Skip to start of line */
+        if (buf[pos] == '\n' || buf[pos] == '\r') { pos++; continue; }
+
+        /* Find end of line */
+        int line_start = pos;
+        while (pos < nread && buf[pos] != '\n' && buf[pos] != '\r') pos++;
+        int line_end = pos;
+
+        /* Skip comment lines */
+        if (buf[line_start] == '#') continue;
+
+        /* Find the colon separator */
+        int colon = -1;
+        for (int i = line_start; i < line_end; i++) {
+            if (buf[i] == ':') { colon = i; break; }
+        }
+        if (colon < 0) continue;  /* malformed line */
+
+        int name_len = colon - line_start;
+        int hash_len = line_end - colon - 1;
+
+        /* Skip entries with no password (e.g. "guest:*") */
+        if (hash_len == 1 && buf[colon + 1] == '*') continue;
+
+        /* Hash must be exactly 64 hex chars */
+        if (hash_len != SHA256_HASH_SIZE * 2) continue;
+        if (name_len <= 0 || name_len >= MAX_USERNAME_LEN) continue;
+
+        /* Decode the hash */
+        uint8_t hash[SHA256_HASH_SIZE];
+        if (hex_to_hash(&buf[colon + 1], hash) != 0) continue;
+
+        /* Add to user_db */
+        int slot = user_count;
+        for (int j = 0; j < name_len; j++)
+            user_db[slot].username[j] = buf[line_start + j];
+        user_db[slot].username[name_len] = '\0';
+
+        for (int j = 0; j < SHA256_HASH_SIZE; j++)
+            user_db[slot].password_hash[j] = hash[j];
+
+        user_db[slot].used = 1;
+        user_count++;
+        loaded++;
+    }
+
+    uart_puts("[PASSWORD_STORE] Loaded ");
+    uart_putu((unsigned)loaded);
+    uart_puts(" users from /etc/shadow\n");
+}
+
 void password_store_init(void) {
     if (initialized) return;
     
@@ -103,6 +288,7 @@ int password_store_add(const char* username, const char* password) {
         uart_puts("[PASSWORD_STORE] Updated password for user: ");
         uart_puts(username);
         uart_puts("\n");
+        save_shadow();
         return 0;
     }
     
@@ -130,6 +316,7 @@ int password_store_add(const char* username, const char* password) {
             uart_puts("[PASSWORD_STORE] Added new user: ");
             uart_puts(username);
             uart_puts("\n");
+            save_shadow();
             return 0;
         }
     }
