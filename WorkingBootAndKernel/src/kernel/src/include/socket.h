@@ -318,6 +318,30 @@ int sock_recv(int fd, void *buf, uint16_t maxlen);
  */
 int sock_close(int fd);
 
+/* ====================================================================
+ *  Syscall helper — packs the extra arguments for sendto / recvfrom
+ *  since the syscall ABI only carries three user-visible registers.
+ * ==================================================================== */
+
+/**
+ * @brief Argument block passed by pointer for SYS_SENDTO / SYS_RECVFROM.
+ *
+ * Userspace fills this struct and passes its address as arg2:
+ *
+ *   SYS_SENDTO:
+ *     arg1 = fd
+ *     arg2 = pointer to socket_io_args_t  { buf (const void*), len, addr (dest) }
+ *
+ *   SYS_RECVFROM:
+ *     arg1 = fd
+ *     arg2 = pointer to socket_io_args_t  { buf (void*), len (maxlen), addr (filled with sender) }
+ */
+typedef struct socket_io_args {
+    void        *buf;       /* TX: payload source;  RX: payload destination   */
+    uint16_t     len;       /* TX: bytes to send;   RX: buffer capacity        */
+    sockaddr_in_t addr;     /* TX: destination;     RX: filled with source      */
+} socket_io_args_t;
+
 /* ---- Utility ---- */
 
 /**

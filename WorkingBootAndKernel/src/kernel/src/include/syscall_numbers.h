@@ -67,3 +67,13 @@
 
 /* Line editing with cursor support */
 #define SYS_READLINE 70
+
+/* Socket syscalls (BSD-style) */
+#define SYS_SOCKET      80   /* socket(domain, type, protocol) -> fd   */
+#define SYS_BIND        81   /* bind(fd, *sockaddr_in) -> 0 or err     */
+#define SYS_SENDTO      82   /* sendto(fd, *socket_io_args_t) -> bytes */
+#define SYS_RECVFROM    83   /* recvfrom(fd, *socket_io_args_t) -> bytes */
+#define SYS_CONNECT     84   /* connect(fd, *sockaddr_in) -> 0 or err  */
+#define SYS_SEND        85   /* send(fd, buf, len) -> bytes            */
+#define SYS_RECV        86   /* recv(fd, buf, maxlen) -> bytes         */
+#define SYS_SOCK_CLOSE  87   /* sock_close(fd) -> 0 or err            */

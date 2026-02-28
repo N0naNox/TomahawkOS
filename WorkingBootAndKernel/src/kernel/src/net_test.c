@@ -27,6 +27,7 @@
 #include "include/loopback.h"
 #include "include/icmp.h"
 #include "include/udp.h"
+#include "include/socket.h"
 #include <uart.h>
 
 /* ====================================================================
@@ -209,6 +210,172 @@ void net_test_loopback(void)
 
     uart_puts("\n");
     uart_puts("=============================================================\n");
-    uart_puts("  SELF-TEST COMPLETE\n");
+    uart_puts("  NET SELF-TEST COMPLETE\n");
+    uart_puts("=============================================================\n\n");
+}
+
+/* ====================================================================
+ *  socket_self_test — socket-layer end-to-end test over loopback
+ * ==================================================================== */
+
+/** Port used exclusively by this test — kept clear of net_test ports. */
+#define SOCK_TEST_PORT  8888
+
+/** Payload sent and expected back. */
+static const uint8_t sock_test_payload[] = { 'S', 'O', 'C', 'K', 'E', 'T' };
+#define SOCK_TEST_LEN  ((uint16_t)sizeof(sock_test_payload))
+
+void socket_self_test(void)
+{
+    int pass = 0, fail = 0;
+
+    uart_puts("\n");
+    uart_puts("=============================================================\n");
+    uart_puts("  SOCKET LAYER SELF-TEST  (loopback 127.0.0.1)\n");
+    uart_puts("=============================================================\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 1: sock_create — create a UDP/AF_INET socket
+     * ---------------------------------------------------------------- */
+    uart_puts("[sock_test] --- Test 1: sock_create(AF_INET, SOCK_DGRAM, 0) ---\n");
+
+    int fd = sock_create(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        uart_puts("[sock_test]   FAIL: sock_create returned err=");
+        uart_putu((uint64_t)(int64_t)-fd);
+        uart_puts("\n");
+        fail++;
+        goto sock_done;   /* cannot continue without a valid fd */
+    }
+    uart_puts("[sock_test]   sock_create returned fd=");
+    uart_putu((uint64_t)fd);
+    uart_puts("\n");
+    uart_puts("[sock_test]   PASS: socket created\n\n");
+    pass++;
+
+    /* ----------------------------------------------------------------
+     *  Test 2: sock_bind — bind to 127.0.0.1:8888
+     * ---------------------------------------------------------------- */
+    uart_puts("[sock_test] --- Test 2: sock_bind(fd, 127.0.0.1:8888) ---\n");
+
+    {
+        sockaddr_in_t local = sockaddr_in_make(IPV4(127, 0, 0, 1), SOCK_TEST_PORT);
+        int ret = sock_bind(fd, &local);
+        if (ret != SOCK_ERR_OK) {
+            uart_puts("[sock_test]   FAIL: sock_bind returned err=");
+            uart_putu((uint64_t)(int64_t)-ret);
+            uart_puts("\n");
+            fail++;
+            goto sock_cleanup;
+        }
+        uart_puts("[sock_test]   PASS: bound to 127.0.0.1:8888\n\n");
+        pass++;
+    }
+
+    /* ----------------------------------------------------------------
+     *  Test 3: sock_sendto — send payload to ourselves
+     *
+     *  Loopback is fully synchronous: udp_send() drives the frame all
+     *  the way through the stack and fires socket_udp_dispatch() before
+     *  returning, so the datagram is already in the RX ring when
+     *  sock_sendto() returns.
+     * ---------------------------------------------------------------- */
+    uart_puts("[sock_test] --- Test 3: sock_sendto 6 bytes to 127.0.0.1:8888 ---\n");
+
+    {
+        sockaddr_in_t dest = sockaddr_in_make(IPV4(127, 0, 0, 1), SOCK_TEST_PORT);
+        int ret = sock_sendto(fd, sock_test_payload, SOCK_TEST_LEN, &dest);
+        if (ret != (int)SOCK_TEST_LEN) {
+            uart_puts("[sock_test]   FAIL: sock_sendto returned ");
+            uart_putu((uint64_t)(int64_t)ret);
+            uart_puts(" (expected ");
+            uart_putu(SOCK_TEST_LEN);
+            uart_puts(")\n");
+            fail++;
+            goto sock_cleanup;
+        }
+        uart_puts("[sock_test]   sock_sendto returned ");
+        uart_putu((uint64_t)ret);
+        uart_puts(" bytes\n");
+        uart_puts("[sock_test]   PASS: sendto succeeded\n\n");
+        pass++;
+    }
+
+    /* ----------------------------------------------------------------
+     *  Test 4: sock_recvfrom — read the datagram back
+     * ---------------------------------------------------------------- */
+    uart_puts("[sock_test] --- Test 4: sock_recvfrom ---\n");
+
+    {
+        uint8_t rxbuf[64];
+        sockaddr_in_t from;
+        int ret = sock_recvfrom(fd, rxbuf, (uint16_t)sizeof(rxbuf), &from);
+        if (ret != (int)SOCK_TEST_LEN) {
+            uart_puts("[sock_test]   FAIL: sock_recvfrom returned ");
+            uart_putu((uint64_t)(int64_t)ret);
+            uart_puts(" (expected ");
+            uart_putu(SOCK_TEST_LEN);
+            uart_puts(")\n");
+            fail++;
+            goto sock_cleanup;
+        }
+
+        /* Verify payload content */
+        int mismatch = 0;
+        for (int i = 0; i < (int)SOCK_TEST_LEN; i++) {
+            if (rxbuf[i] != sock_test_payload[i]) {
+                uart_puts("[sock_test]   FAIL: payload mismatch at byte ");
+                uart_putu((uint64_t)i);
+                uart_puts(": got 0x");
+                uart_putu(rxbuf[i]);
+                uart_puts(", expected 0x");
+                uart_putu(sock_test_payload[i]);
+                uart_puts("\n");
+                mismatch = 1;
+                fail++;
+                break;
+            }
+        }
+
+        /* Verify source address is 127.0.0.1 */
+        if (!mismatch && !ipv4_equal(from.sin_addr, IPV4(127, 0, 0, 1))) {
+            uart_puts("[sock_test]   FAIL: sender address is not 127.0.0.1\n");
+            mismatch = 1;
+            fail++;
+        }
+
+        if (!mismatch) {
+            uart_puts("[sock_test]   received \"SOCKET\" from 127.0.0.1\n");
+            uart_puts("[sock_test]   PASS: recvfrom succeeded\n\n");
+            pass++;
+        }
+    }
+
+sock_cleanup:
+    /* ----------------------------------------------------------------
+     *  Test 5: sock_close — release resources
+     * ---------------------------------------------------------------- */
+    uart_puts("[sock_test] --- Test 5: sock_close ---\n");
+
+    {
+        int ret = sock_close(fd);
+        if (ret != SOCK_ERR_OK) {
+            uart_puts("[sock_test]   FAIL: sock_close returned err=");
+            uart_putu((uint64_t)(int64_t)-ret);
+            uart_puts("\n");
+            fail++;
+        } else {
+            uart_puts("[sock_test]   PASS: sock_close succeeded\n\n");
+            pass++;
+        }
+    }
+
+sock_done:
+    uart_puts("=============================================================\n");
+    uart_puts("  SOCKET SELF-TEST COMPLETE  pass=");
+    uart_putu((uint64_t)pass);
+    uart_puts("  fail=");
+    uart_putu((uint64_t)fail);
+    uart_puts("\n");
     uart_puts("=============================================================\n\n");
 }
