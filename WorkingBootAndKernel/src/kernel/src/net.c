@@ -18,6 +18,7 @@
 #include "include/net.h"
 #include "include/net_device.h"
 #include "include/net_rx.h"
+#include "include/net_tx.h"
 #include "include/ethernet.h"
 #include "include/arp.h"
 #include "include/udp.h"
@@ -602,8 +603,9 @@ void net_init(void)
 {
     uart_puts("[net] Initialising network stack...\n");
 
-    /* 0. RX ring (must come before any device or interrupt setup) */
+    /* 0. RX and TX rings (must come before any device or interrupt setup) */
     net_rx_init();
+    net_tx_init();
 
     /* 1. Packet buffer pool */
     netbuf_pool_init();

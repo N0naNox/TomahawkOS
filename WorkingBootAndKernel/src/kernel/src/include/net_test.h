@@ -62,4 +62,22 @@ void net_device_iface_test(void);
  */
 void net_rx_path_test(void);
 
+/**
+ * @brief Run the TX packet path self-test.
+ *
+ * Exercises the deferred TX ring (net_tx.h / net_tx.c):
+ *   1. net_tx_pending() == 0 before any enqueue
+ *   2. net_tx_enqueue() succeeds and increments pending count
+ *   3. net_tx_pending() == 1 after one enqueue
+ *   4. net_tx_flush() drains the single entry (returns 1)
+ *   5. net_tx_pending() == 0 after flush
+ *   6. net_tx_print_stats() smoke-test (no crash)
+ *   7. Ring-full: fill all NET_TX_RING_SIZE slots, verify the
+ *      next enqueue is rejected with -1 (drop path)
+ *   8. Drain the ring cleanly after the full test
+ *
+ * Results are printed to serial (UART).
+ */
+void net_tx_path_test(void);
+
 #endif /* NET_TEST_H */

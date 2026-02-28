@@ -88,6 +88,7 @@ C_SOURCES  :=              \
 	${SRC_DIR}/loopback.c \
 	${SRC_DIR}/net_test.c \
 	${SRC_DIR}/net_rx.c \
+	${SRC_DIR}/net_tx.c \
 	${SRC_DIR}/socket.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
