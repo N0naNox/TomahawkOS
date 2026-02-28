@@ -874,3 +874,187 @@ void net_tx_path_test(void)
     uart_puts("\n");
     uart_puts("=============================================================\n\n");
 }
+
+/* ====================================================================
+ *  sock_send_recv_test — connect / send / recv end-to-end test
+ * ==================================================================== */
+
+/** Port used exclusively by this test (distinct from port 8888 used by socket_self_test). */
+#define SEND_RECV_TEST_PORT  8889
+
+/** Payload for the send/recv test. */
+static const uint8_t send_recv_payload[] = {
+    'S', 'E', 'N', 'D', 'R', 'E', 'C', 'V'
+};
+#define SEND_RECV_LEN  ((uint16_t)sizeof(send_recv_payload))
+
+#define SR_CHECK(cond, msg) \
+    do { \
+        if (cond) { \
+            uart_puts("[sr_test]   PASS: " msg "\n"); \
+            pass++; \
+        } else { \
+            uart_puts("[sr_test]   FAIL: " msg "\n"); \
+            fail++; \
+        } \
+    } while (0)
+
+void sock_send_recv_test(void)
+{
+    int pass = 0, fail = 0;
+
+    uart_puts("\n");
+    uart_puts("=============================================================\n");
+    uart_puts("  SEND / RECV SYSCALL TEST  (loopback 127.0.0.1)\n");
+    uart_puts("=============================================================\n");
+
+    /* Create the socket */
+    int fd = sock_create(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        uart_puts("[sr_test]   FATAL: sock_create failed\n");
+        fail++;
+        goto sr_done;
+    }
+    uart_puts("[sr_test] sock_create fd=");
+    uart_putu((uint64_t)fd);
+    uart_puts("\n\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 1: sock_send on an unconnected socket → SOCK_ERR_NOTBOUND
+     * ---------------------------------------------------------------- */
+    uart_puts("[sr_test] --- Test 1: send() on unconnected socket ---\n");
+    {
+        int ret = sock_send(fd, send_recv_payload, SEND_RECV_LEN);
+        SR_CHECK(ret == SOCK_ERR_NOTBOUND,
+                 "sock_send() returns SOCK_ERR_NOTBOUND when not connected");
+    }
+    uart_puts("\n");
+
+    /* Bind to 127.0.0.1:8889 */
+    {
+        sockaddr_in_t local = sockaddr_in_make(IPV4(127, 0, 0, 1),
+                                              SEND_RECV_TEST_PORT);
+        int ret = sock_bind(fd, &local);
+        if (ret != SOCK_ERR_OK) {
+            uart_puts("[sr_test]   FATAL: sock_bind failed err=");
+            uart_putu((uint64_t)(int64_t)-ret);
+            uart_puts("\n");
+            fail++;
+            goto sr_cleanup;
+        }
+        uart_puts("[sr_test] bound to 127.0.0.1:8889\n\n");
+    }
+
+    /* ----------------------------------------------------------------
+     *  Test 2: sock_send on a bound-but-not-connected socket → NOTBOUND
+     * ---------------------------------------------------------------- */
+    uart_puts("[sr_test] --- Test 2: send() on bound but not connected socket ---\n");
+    {
+        int ret = sock_send(fd, send_recv_payload, SEND_RECV_LEN);
+        SR_CHECK(ret == SOCK_ERR_NOTBOUND,
+                 "sock_send() returns SOCK_ERR_NOTBOUND before connect()");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 3: sock_connect — connect to self (127.0.0.1:8889)
+     * ---------------------------------------------------------------- */
+    uart_puts("[sr_test] --- Test 3: sock_connect(fd, 127.0.0.1:8889) ---\n");
+    {
+        sockaddr_in_t remote = sockaddr_in_make(IPV4(127, 0, 0, 1),
+                                               SEND_RECV_TEST_PORT);
+        int ret = sock_connect(fd, &remote);
+        SR_CHECK(ret == SOCK_ERR_OK, "sock_connect() to self returns 0");
+
+        /* Verify state changed to CONNECTED */
+        socket_t *s = socket_get(fd);
+        SR_CHECK(s && s->state == SOCK_STATE_CONNECTED,
+                 "socket state is CONNECTED after connect()");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 4: sock_send — transmit 8 bytes to ourselves
+     *
+     *  Loopback is synchronous: by the time sock_sendto() returns the
+     *  datagram is already in the socket's RX ring.
+     * ---------------------------------------------------------------- */
+    uart_puts("[sr_test] --- Test 4: sock_send() 8 bytes to self ---\n");
+    {
+        int ret = sock_send(fd, send_recv_payload, SEND_RECV_LEN);
+        SR_CHECK(ret == (int)SEND_RECV_LEN,
+                 "sock_send() returns 8 (bytes sent)");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 5: sock_recv — receive the datagram just sent
+     * ---------------------------------------------------------------- */
+    uart_puts("[sr_test] --- Test 5: sock_recv() drains the datagram ---\n");
+    {
+        uint8_t rxbuf[64];
+        int ret = sock_recv(fd, rxbuf, (uint16_t)sizeof(rxbuf));
+        SR_CHECK(ret == (int)SEND_RECV_LEN,
+                 "sock_recv() returns 8 (bytes received)");
+
+        if (ret == (int)SEND_RECV_LEN) {
+            /* Verify byte-for-byte */
+            int ok = 1;
+            for (int i = 0; i < (int)SEND_RECV_LEN; i++) {
+                if (rxbuf[i] != send_recv_payload[i]) {
+                    uart_puts("[sr_test]   FAIL: payload mismatch at byte ");
+                    uart_putu((uint64_t)i);
+                    uart_puts("\n");
+                    ok = 0;
+                    fail++;
+                    break;
+                }
+            }
+            if (ok) {
+                uart_puts("[sr_test]   PASS: payload \"SENDRECV\" matches\n");
+                pass++;
+            }
+        }
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 6: sock_recv on empty ring with non_blocking → SOCK_ERR_AGAIN
+     * ---------------------------------------------------------------- */
+    uart_puts("[sr_test] --- Test 6: sock_recv() on empty ring (non-blocking) ---\n");
+    {
+        socket_t *s = socket_get(fd);
+        if (s) {
+            s->non_blocking = 1;   /* switch to non-blocking mode */
+            uint8_t dummy[4];
+            int ret = sock_recv(fd, dummy, (uint16_t)sizeof(dummy));
+            SR_CHECK(ret == SOCK_ERR_AGAIN,
+                     "sock_recv() returns SOCK_ERR_AGAIN when ring empty");
+            s->non_blocking = 0;   /* restore blocking mode */
+        } else {
+            uart_puts("[sr_test]   FAIL: socket_get returned NULL\n");
+            fail++;
+        }
+    }
+    uart_puts("\n");
+
+sr_cleanup:
+    /* ----------------------------------------------------------------
+     *  Test 7: sock_close
+     * ---------------------------------------------------------------- */
+    uart_puts("[sr_test] --- Test 7: sock_close ---\n");
+    {
+        int ret = sock_close(fd);
+        SR_CHECK(ret == SOCK_ERR_OK, "sock_close() returns 0");
+    }
+    uart_puts("\n");
+
+sr_done:
+    uart_puts("=============================================================\n");
+    uart_puts("  SEND / RECV TEST COMPLETE  pass=");
+    uart_putu((uint64_t)pass);
+    uart_puts("  fail=");
+    uart_putu((uint64_t)fail);
+    uart_puts("\n");
+    uart_puts("=============================================================\n\n");
+}

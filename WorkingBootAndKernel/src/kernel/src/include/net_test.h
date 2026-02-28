@@ -80,4 +80,24 @@ void net_rx_path_test(void);
  */
 void net_tx_path_test(void);
 
+/**
+ * @brief Self-test for the send() / recv() connected-socket path.
+ *
+ * Specifically exercises the connect → send → recv flow, which
+ * is distinct from the sendto / recvfrom path tested by
+ * socket_self_test().  Tests run over the loopback interface.
+ *
+ *   1.  sock_send() on an unconnected socket → SOCK_ERR_NOTBOUND
+ *   2.  sock_bind(fd, 127.0.0.1:8889)
+ *   3.  sock_send() on a bound-but-not-connected socket → SOCK_ERR_NOTBOUND
+ *   4.  sock_connect(fd, 127.0.0.1:8889)  (connect to self)
+ *   5.  sock_send() — loopback delivers the datagram into the RX ring
+ *   6.  sock_recv() — drains the datagram; payload verified byte-for-byte
+ *   7.  sock_recv() on empty ring returns SOCK_ERR_AGAIN (non-blocking)
+ *   8.  sock_close()
+ *
+ * Results are printed to serial (UART).
+ */
+void sock_send_recv_test(void);
+
 #endif /* NET_TEST_H */
