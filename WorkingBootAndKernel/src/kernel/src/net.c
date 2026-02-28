@@ -17,13 +17,68 @@
 
 #include "include/net.h"
 #include "include/net_device.h"
+#include "include/net_rx.h"
 #include "include/ethernet.h"
 #include "include/arp.h"
 #include "include/udp.h"
 #include "include/loopback.h"
 #include "include/socket.h"
 #include "include/string.h"
+#include "include/hal_port_io.h"
+#include "include/idt.h"
 #include <uart.h>
+
+/* ====================================================================
+ *  PIC helpers
+ *
+ *  Master PIC  IRQ 0-7   → vectors 32-39  (port 0x21 = data/mask)
+ *  Slave  PIC  IRQ 8-15  → vectors 40-47  (port 0xA1 = data/mask)
+ *  IRQ 2 on master is the cascade line to the slave.
+ * ==================================================================== */
+
+#define PIC_MASTER_CMD   0x20
+#define PIC_MASTER_DATA  0x21
+#define PIC_SLAVE_CMD    0xA0
+#define PIC_SLAVE_DATA   0xA1
+#define PIC_EOI          0x20
+
+void pic_unmask_irq(uint8_t irq_line)
+{
+    if (irq_line < 8) {
+        uint8_t mask = hal_inb(PIC_MASTER_DATA);
+        mask &= (uint8_t)~(1u << irq_line);
+        hal_outb(PIC_MASTER_DATA, mask);
+    } else {
+        /* Unmask cascade (IRQ2) on master so slave interrupts reach the CPU */
+        uint8_t master_mask = hal_inb(PIC_MASTER_DATA);
+        master_mask &= ~(1u << 2);
+        hal_outb(PIC_MASTER_DATA, master_mask);
+
+        uint8_t slave_mask = hal_inb(PIC_SLAVE_DATA);
+        slave_mask &= (uint8_t)~(1u << (irq_line - 8));
+        hal_outb(PIC_SLAVE_DATA, slave_mask);
+    }
+}
+
+void pic_mask_irq(uint8_t irq_line)
+{
+    if (irq_line < 8) {
+        uint8_t mask = hal_inb(PIC_MASTER_DATA);
+        mask |= (uint8_t)(1u << irq_line);
+        hal_outb(PIC_MASTER_DATA, mask);
+    } else {
+        uint8_t slave_mask = hal_inb(PIC_SLAVE_DATA);
+        slave_mask |= (uint8_t)(1u << (irq_line - 8));
+        hal_outb(PIC_SLAVE_DATA, slave_mask);
+    }
+}
+
+void pic_send_eoi_irq(uint8_t irq_line)
+{
+    if (irq_line >= 8)
+        hal_outb(PIC_SLAVE_CMD, PIC_EOI);   /* slave first */
+    hal_outb(PIC_MASTER_CMD, PIC_EOI);      /* always master */
+}
 
 /* ====================================================================
  *  netbuf pool
@@ -135,13 +190,15 @@ static int           device_count = 0;
 int net_device_register(net_device_t *dev)
 {
     if (device_count >= NET_MAX_DEVICES) return -1;
-    dev->registered = 1;
-    dev->tx_packets = 0;
-    dev->tx_bytes   = 0;
-    dev->rx_packets = 0;
-    dev->rx_bytes   = 0;
-    dev->tx_errors  = 0;
-    dev->rx_errors  = 0;
+    dev->registered  = 1;
+    dev->irq_vector  = 0;
+    dev->irq_line    = 0;
+    dev->tx_packets  = 0;
+    dev->tx_bytes    = 0;
+    dev->rx_packets  = 0;
+    dev->rx_bytes    = 0;
+    dev->tx_errors   = 0;
+    dev->rx_errors   = 0;
     registered_devices[device_count++] = dev;
 
     uart_puts("[net] registered device: ");
@@ -188,6 +245,108 @@ void net_device_set_ip(net_device_t *dev,
     dev->ip      = ip;
     dev->netmask = netmask;
     dev->gateway = gateway;
+}
+
+/* ====================================================================
+ *  IRQ wiring
+ * ==================================================================== */
+
+/**
+ * IDT handler registered for every NIC's IRQ vector.
+ *
+ * Top-half receive loop:
+ *   For each available frame from the NIC:
+ *     1. alloc a netbuf
+ *     2. call dev->ops->isr(dev, nb)  — driver reads one frame from HW
+ *     3. on success, call net_rx_enqueue(dev, nb) — push to RX ring
+ *     4. on failure, free the netbuf
+ *   Then send PIC EOI so the PIC can accept the next interrupt.
+ */
+void net_irq_dispatch(regs_t *r)
+{
+    uint64_t vector = r->int_no;
+
+    /* Find the device whose IRQ vector matches */
+    net_device_t *dev = NULL;
+    for (int i = 0; i < device_count; i++) {
+        if ((uint64_t)registered_devices[i]->irq_vector == vector) {
+            dev = registered_devices[i];
+            break;
+        }
+    }
+
+    if (!dev || !dev->ops || !dev->ops->isr) {
+        /* Spurious or unclaimed interrupt — just send EOI */
+        uint8_t irq_line = (uint8_t)(vector - 32);
+        pic_send_eoi_irq(irq_line);
+        return;
+    }
+
+    /*
+     * Drain the NIC: one call per frame until the driver signals
+     * "no more frames" (-1).  Each frame is pushed to the RX ring
+     * and processed later by net_rx_process() in the timer tick.
+     */
+    for (;;) {
+        netbuf_t *nb = netbuf_alloc();
+        if (!nb) {
+            /* Pool exhausted — cannot receive any more this tick */
+            dev->rx_errors++;
+            break;
+        }
+
+        int ret = dev->ops->isr(dev, nb);
+        if (ret != 0) {
+            /* No frame available — return the buffer to the pool */
+            netbuf_free(nb);
+            break;
+        }
+
+        /* Frame received — hand off to the bottom-half ring */
+        if (net_rx_enqueue(dev, nb) != 0) {
+            /* Ring full — enqueue already incremented rx_errors */
+            netbuf_free(nb);
+        }
+    }
+
+    /* Acknowledge the interrupt at the PIC */
+    pic_send_eoi_irq(dev->irq_line);
+}
+
+int net_device_register_irq(net_device_t *dev, uint8_t irq_line)
+{
+    if (!dev) return -1;
+    if (!dev->ops || !dev->ops->isr) {
+        uart_puts("[net] net_device_register_irq: ops->isr is NULL for ");
+        uart_puts(dev->name);
+        uart_puts("\n");
+        return -1;
+    }
+    if (irq_line > 15) {
+        uart_puts("[net] net_device_register_irq: irq_line out of range\n");
+        return -1;
+    }
+
+    int vector = 32 + (int)irq_line;
+
+    dev->irq_line   = irq_line;
+    dev->irq_vector = vector;
+
+    /* Wire into the IDT */
+    register_interrupt_handler(vector, net_irq_dispatch);
+
+    /* Enable the PIC line */
+    pic_unmask_irq(irq_line);
+
+    uart_puts("[net] ");
+    uart_puts(dev->name);
+    uart_puts(": IRQ");
+    uart_putu((uint64_t)irq_line);
+    uart_puts(" (vector ");
+    uart_putu((uint64_t)vector);
+    uart_puts(") registered\n");
+
+    return 0;
 }
 
 /* ====================================================================
@@ -442,6 +601,9 @@ void net_device_print_all_stats(void)
 void net_init(void)
 {
     uart_puts("[net] Initialising network stack...\n");
+
+    /* 0. RX ring (must come before any device or interrupt setup) */
+    net_rx_init();
 
     /* 1. Packet buffer pool */
     netbuf_pool_init();

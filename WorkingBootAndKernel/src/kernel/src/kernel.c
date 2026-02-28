@@ -302,6 +302,9 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	/* Run network interface abstraction self-test (results printed to serial) */
 	net_device_iface_test();
 
+	/* Run RX packet path self-test (ring enqueue/process/drop) */
+	net_rx_path_test();
+
 	scheduler_init();
 
 	/* Create essential threads */

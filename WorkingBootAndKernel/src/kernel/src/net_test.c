@@ -24,6 +24,7 @@
 #include "include/net_test.h"
 #include "include/net.h"
 #include "include/net_device.h"
+#include "include/net_rx.h"
 #include "include/loopback.h"
 #include "include/icmp.h"
 #include "include/udp.h"
@@ -593,6 +594,143 @@ void net_device_iface_test(void)
 
     uart_puts("=============================================================\n");
     uart_puts("  NET INTERFACE ABSTRACTION TEST COMPLETE  pass=");
+    uart_putu((uint64_t)pass);
+    uart_puts("  fail=");
+    uart_putu((uint64_t)fail);
+    uart_puts("\n");
+    uart_puts("=============================================================\n\n");
+}
+
+/* ====================================================================
+ *  RX packet path self-test
+ * ==================================================================== */
+
+#define RX_CHECK(cond, msg) \
+    do { \
+        if (cond) { \
+            uart_puts("[rx_test]   PASS: " msg "\n"); \
+            pass++; \
+        } else { \
+            uart_puts("[rx_test]   FAIL: " msg "\n"); \
+            fail++; \
+        } \
+    } while (0)
+
+void net_rx_path_test(void)
+{
+    int pass = 0, fail = 0;
+
+    uart_puts("\n");
+    uart_puts("=============================================================\n");
+    uart_puts("  RX PACKET PATH TEST\n");
+    uart_puts("=============================================================\n");
+
+    /* Grab the loopback device for use as a stand-in NIC */
+    net_device_t *lo = net_device_get_by_name("lo");
+
+    /* ----------------------------------------------------------------
+     *  Test 1: pending count is 0 before any enqueue
+     * ---------------------------------------------------------------- */
+    uart_puts("[rx_test] --- Test 1: pending() == 0 at start ---\n");
+    {
+        int pending = net_rx_pending();
+        RX_CHECK(pending == 0, "net_rx_pending() == 0 before enqueue");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 2: enqueue one frame — returns 0 (success)
+     * ---------------------------------------------------------------- */
+    uart_puts("[rx_test] --- Test 2: enqueue one frame ---\n");
+    {
+        netbuf_t *nb = netbuf_alloc();
+        RX_CHECK(nb != NULL, "netbuf_alloc() succeeded");
+
+        if (nb) {
+            int ret = net_rx_enqueue(lo, nb);
+            RX_CHECK(ret == 0, "net_rx_enqueue() returned 0 (success)");
+
+            /* --------------------------------------------------------
+             *  Test 3: pending count is now 1
+             * -------------------------------------------------------- */
+            uart_puts("[rx_test] --- Test 3: pending() == 1 after enqueue ---\n");
+            int pending = net_rx_pending();
+            RX_CHECK(pending == 1, "net_rx_pending() == 1 after enqueue");
+        }
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 4: process() drains the one queued entry (returns 1)
+     * ---------------------------------------------------------------- */
+    uart_puts("[rx_test] --- Test 4: process() returns 1 ---\n");
+    {
+        int n = net_rx_process();
+        RX_CHECK(n == 1, "net_rx_process() returned 1 (one frame processed)");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 5: pending count returns to 0 after process
+     * ---------------------------------------------------------------- */
+    uart_puts("[rx_test] --- Test 5: pending() == 0 after process ---\n");
+    {
+        int pending = net_rx_pending();
+        RX_CHECK(pending == 0, "net_rx_pending() == 0 after process");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 6: net_rx_print_stats() smoke-test
+     * ---------------------------------------------------------------- */
+    uart_puts("[rx_test] --- Test 6: net_rx_print_stats() (visual) ---\n");
+    {
+        net_rx_print_stats();
+        uart_puts("[rx_test]   PASS: net_rx_print_stats() returned cleanly\n");
+        pass++;
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 7: ring-full — fill every slot, then verify drop
+     *
+     *  We pass NULL for the netbuf pointer so no real memory is
+     *  consumed and net_rx_process() skips ethernet_receive() safely
+     *  (it guards with `if (entry.dev && entry.nb)`).
+     * ---------------------------------------------------------------- */
+    uart_puts("[rx_test] --- Test 7: ring-full drop path ---\n");
+    {
+        /* Fill all NET_RX_RING_SIZE slots */
+        int fill_ok = 1;
+        for (int i = 0; i < NET_RX_RING_SIZE; i++) {
+            if (net_rx_enqueue(lo, NULL) != 0) {
+                fill_ok = 0;
+                break;
+            }
+        }
+        RX_CHECK(fill_ok, "filled all ring slots without error");
+
+        /* One more enqueue must fail with -1 (ring full / drop) */
+        int ret = net_rx_enqueue(lo, NULL);
+        RX_CHECK(ret == -1, "(ring+1)th enqueue returns -1 (drop)");
+    }
+    uart_puts("\n");
+
+    /* ----------------------------------------------------------------
+     *  Test 8: drain the ring after the full test
+     * ---------------------------------------------------------------- */
+    uart_puts("[rx_test] --- Test 8: drain ring after full test ---\n");
+    {
+        int drained = net_rx_process();
+        uart_puts("[rx_test]   drained=");
+        uart_putu((uint64_t)drained);
+        uart_puts(" frames\n");
+        RX_CHECK(net_rx_pending() == 0, "ring empty after drain");
+    }
+    uart_puts("\n");
+
+    uart_puts("=============================================================\n");
+    uart_puts("  RX PACKET PATH TEST COMPLETE  pass=");
     uart_putu((uint64_t)pass);
     uart_puts("  fail=");
     uart_putu((uint64_t)fail);

@@ -22,6 +22,7 @@
 #define NET_DEVICE_H
 
 #include "net.h"
+#include "idt.h"
 
 /* Maximum number of NICs the system can track */
 #define NET_MAX_DEVICES  4
@@ -62,6 +63,26 @@ typedef struct net_device_ops {
     int (*poll)(struct net_device *dev, struct netbuf *nb);
 
     /**
+     * @brief Interrupt-driven RX top half.
+     *
+     * Called by net_irq_dispatch() immediately after the NIC asserts
+     * its IRQ.  The driver should:
+     *   1. Read exactly ONE frame from the NIC hardware into @p nb.
+     *   2. Set nb->len to the frame length and nb->data to the start.
+     *   3. Acknowledge the NIC's interrupt register so it can fire again.
+     *   4. Return 0 on success or -1 if no frame was available.
+     *
+     * net_irq_dispatch() calls this in a loop until it returns -1, so
+     * the driver does not need to loop internally — one call = one frame.
+     *
+     * The PIC EOI is sent by net_irq_dispatch() after all frames are
+     * consumed, so the driver must NOT send EOI itself.
+     *
+     * NULL if the device does not use interrupts (poll-only).
+     */
+    int (*isr)(struct net_device *dev, struct netbuf *nb);
+
+    /**
      * @brief Start / enable the NIC (bring the link up).
      * @return 0 on success.
      */
@@ -93,6 +114,10 @@ typedef struct net_device {
 
     /* ---- driver-private data ---- */
     void             *priv;    /* driver stores its own state here  */
+
+    /* ---- IRQ wiring (0 = not IRQ-driven, uses poll instead) ---- */
+    int              irq_vector;  /* IDT vector number (32 + irq_line) */
+    uint8_t          irq_line;    /* PIC IRQ line 0-15               */
 
     /* ---- statistics ---- */
     uint64_t         tx_packets;
@@ -173,6 +198,66 @@ int net_device_up(net_device_t *dev);
  * @return 0 on success, -1 if dev is NULL, or the ops->stop error code.
  */
 int net_device_down(net_device_t *dev);
+
+/* ====================================================================
+ *  IRQ wiring
+ * ==================================================================== */
+
+/**
+ * @brief Register a hardware IRQ line for a NIC and enable it in the PIC.
+ *
+ * Wires the NIC to receive interrupt-driven RX:
+ *   1. Records @p irq_line and the derived IDT vector in the device.
+ *   2. Registers net_irq_dispatch() as the IDT handler for that vector.
+ *   3. Unmasks the IRQ line in the PIC (and the cascade IRQ2 on the
+ *      master PIC if @p irq_line >= 8).
+ *
+ * The device's ops->isr callback must be non-NULL before calling this.
+ *
+ * @param dev       Network device (must already be registered).
+ * @param irq_line  PIC IRQ line: 0-7 → master PIC, 8-15 → slave PIC.
+ * @return 0 on success, -1 on error.
+ */
+int net_device_register_irq(net_device_t *dev, uint8_t irq_line);
+
+/**
+ * @brief Unmask (enable) a PIC IRQ line.
+ *
+ * Handles both master (0-7) and slave (8-15) lines.
+ * For slave lines, also unmasks the cascade (IRQ2) on the master.
+ *
+ * @param irq_line  PIC IRQ line (0-15).
+ */
+void pic_unmask_irq(uint8_t irq_line);
+
+/**
+ * @brief Mask (disable) a PIC IRQ line.
+ *
+ * @param irq_line  PIC IRQ line (0-15).
+ */
+void pic_mask_irq(uint8_t irq_line);
+
+/**
+ * @brief Send EOI to the PIC for the given IRQ line.
+ *
+ * For IRQ 8-15 (slave), sends EOI to both slave and master PICs.
+ *
+ * @param irq_line  PIC IRQ line (0-15).
+ */
+void pic_send_eoi_irq(uint8_t irq_line);
+
+/**
+ * @brief IDT interrupt handler registered for NIC IRQ vectors.
+ *
+ * Called by isr_common_handler for any vector registered via
+ * net_device_register_irq().  Performs the top-half receive loop:
+ *   1. Identify the device by regs->int_no.
+ *   2. Loop: alloc netbuf → ops->isr(dev, nb) → net_rx_enqueue().
+ *   3. Send PIC EOI.
+ *
+ * Not called directly by driver code.
+ */
+void net_irq_dispatch(regs_t *r);
 
 /* ====================================================================
  *  Raw transmit
