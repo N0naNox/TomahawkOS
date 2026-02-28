@@ -44,4 +44,22 @@ void socket_self_test(void);
  */
 void net_device_iface_test(void);
 
+/**
+ * @brief Run the RX packet path self-test.
+ *
+ * Exercises the ISR-safe RX ring (net_rx.h / net_rx.c):
+ *   1. net_rx_pending() == 0 before any enqueue
+ *   2. net_rx_enqueue() succeeds and increments pending count
+ *   3. net_rx_pending() == 1 after one enqueue
+ *   4. net_rx_process() drains the single entry (returns 1)
+ *   5. net_rx_pending() == 0 after process
+ *   6. net_rx_print_stats() smoke-test (no crash)
+ *   7. Ring-full: fill all NET_RX_RING_SIZE slots, verify the
+ *      next enqueue is rejected with -1 (drop path)
+ *   8. Drain the ring cleanly after the full test
+ *
+ * Results are printed to serial (UART).
+ */
+void net_rx_path_test(void);
+
 #endif /* NET_TEST_H */

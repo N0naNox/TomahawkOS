@@ -2,6 +2,7 @@
 #include "idt.h"
 #include "hal_port_io.h"
 #include "scheduler.h"
+#include "include/net_rx.h"
 #include <stdint.h>
 #include <uart.h>
 
@@ -51,6 +52,15 @@ void timer_irq_handler(regs_t* r) {
     if (timer_ticks == 1) {
         uart_puts("timer: first tick\n");
     }
+
+    /*
+     * Bottom-half network RX processing.
+     * Drains the global RX ring populated by NIC ISRs (net_irq_dispatch)
+     * and runs the full Ethernet → IPv4 → UDP → socket demux chain on
+     * each queued frame.  Runs here (IRQ0 context) so we get ~1 ms
+     * latency at 1000 Hz, or ~10 ms at the default 100 Hz PIT rate.
+     */
+    net_rx_process();
 
     /* Preemptive round robin: trigger scheduler */
     scheduler_tick(r);
