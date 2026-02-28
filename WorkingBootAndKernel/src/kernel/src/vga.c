@@ -176,3 +176,51 @@ void vga_write(const char* str) {
 	for (const char* p = str; *p; ++p) vga_putc(*p);
 }
 
+void vga_draw_char_at(int row, int col, char c) {
+	if (!fb_buffer) return;
+	uint32_t x = (uint32_t)col * char_w;
+	uint32_t y = (uint32_t)row * char_h;
+	if (font_scale >= 3) {
+		draw_char_24x48(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
+	} else if (font_scale == 2) {
+		draw_char_16x32(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
+	} else {
+		draw_char_8x16(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
+	}
+}
+
+void vga_clear_char(int row, int col) {
+	if (!fb_buffer) return;
+	uint32_t x = (uint32_t)col * char_w;
+	uint32_t y = (uint32_t)row * char_h;
+	for (uint32_t py = y; py < y + char_h && py < fb_height; py++) {
+		for (uint32_t px = x; px < x + char_w && px < fb_width; px++) {
+			fb_buffer[py * fb_pitch + px] = 0x00000000;
+		}
+	}
+}
+
+void vga_draw_cursor(void) {
+	if (!fb_buffer) return;
+	/* Draw a 2-pixel-high underline at the bottom of the current cell */
+	uint32_t x = (uint32_t)vga_col * char_w;
+	uint32_t y = (uint32_t)vga_row * char_h + char_h - 2;
+	for (uint32_t py = y; py < y + 2 && py < fb_height; py++) {
+		for (uint32_t px = x; px < x + char_w && px < fb_width; px++) {
+			fb_buffer[py * fb_pitch + px] = 0x00AAAAAA; /* light grey */
+		}
+	}
+}
+
+void vga_erase_cursor(void) {
+	if (!fb_buffer) return;
+	/* Erase the 2-pixel-high underline at the bottom of the current cell */
+	uint32_t x = (uint32_t)vga_col * char_w;
+	uint32_t y = (uint32_t)vga_row * char_h + char_h - 2;
+	for (uint32_t py = y; py < y + 2 && py < fb_height; py++) {
+		for (uint32_t px = x; px < x + char_w && px < fb_width; px++) {
+			fb_buffer[py * fb_pitch + px] = 0x00000000;
+		}
+	}
+}
+

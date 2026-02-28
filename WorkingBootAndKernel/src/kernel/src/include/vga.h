@@ -72,5 +72,17 @@ uint32_t vga_get_font_scale(void);
 /* Get text grid dimensions */
 void vga_get_dimensions(int* cols, int* rows);
 
+/* Draw a single character at grid position (row, col) */
+void vga_draw_char_at(int row, int col, char c);
+
+/* Clear (blank) one character cell at grid position (row, col) */
+void vga_clear_char(int row, int col);
+
+/* Draw visible underline cursor at the current cursor position */
+void vga_draw_cursor(void);
+
+/* Erase visible underline cursor at the current cursor position */
+void vga_erase_cursor(void);
+
 #endif /* VGA_H */
 
