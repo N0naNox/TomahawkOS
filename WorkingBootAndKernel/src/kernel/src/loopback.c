@@ -91,14 +91,16 @@ static int lo_poll(struct net_device *dev, struct netbuf *nb)
 
 static int lo_start(struct net_device *dev)
 {
-    dev->link_up = 1;
+    /* link_up is set by net_device_up() after this returns */
+    (void)dev;
     uart_puts("[lo] link up\n");
     return 0;
 }
 
 static int lo_stop(struct net_device *dev)
 {
-    dev->link_up = 0;
+    /* link_up is cleared by net_device_down() after this returns */
+    (void)dev;
     uart_puts("[lo] link down\n");
     return 0;
 }
@@ -127,11 +129,11 @@ void loopback_init(void)
     lo->netmask = IPV4(255, 0, 0, 0);
     lo->gateway = IPV4_ZERO;
 
-    /* Link is always up */
-    lo->link_up = 1;
-
-    /* Register with the device table */
+    /* Register with the device table first */
     net_device_register(lo);
+
+    /* Bring the link up via the proper lifecycle function */
+    net_device_up(lo);
 
     /* Pre-populate ARP cache so 127.0.0.1 resolves instantly
      * (no broadcast needed on loopback). */
