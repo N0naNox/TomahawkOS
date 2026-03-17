@@ -49,7 +49,7 @@ static const char scancode_map_shift[128] = {
 };
 
 /* Shutdown the system */
-static void shutdown_system(void) {
+void shutdown_system(void) {
     uart_puts("\n\n=== SYSTEM SHUTDOWN (F12 pressed) ===\n");
     vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
     vga_write("\n\n  System shutting down...\n");

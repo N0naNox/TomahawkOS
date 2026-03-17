@@ -33,6 +33,52 @@ extern volatile int usermode_pass_completed;
 /* Shell state - current logged in user ID (-1 = not logged in) */
 static volatile int shell_current_uid = -1;
 
+/* Skip past the first word and spaces in a cmdline to get the argument.
+ * e.g. "userdel admin2" → returns pointer to "admin2" */
+static const char *skip_to_arg1(const char *cmdline) {
+    if (!cmdline) return NULL;
+    while (*cmdline && *cmdline != ' ') cmdline++;
+    while (*cmdline == ' ') cmdline++;
+    return *cmdline ? cmdline : NULL;
+}
+
+/* Case-insensitive character comparison */
+static int to_lower(int c) {
+    return (c >= 'A' && c <= 'Z') ? c + 32 : c;
+}
+
+/* Check if the current user has FAT32 write permission.
+ * - Not logged in → deny
+ * - Admin (uid 0 or is_admin) → allow everywhere
+ * - Regular user → only inside /home/<username>
+ * - Guest (logged out) → deny */
+static int fat32_check_write_perm(void) {
+    if (shell_current_uid < 0) return 0;
+    if (shell_current_uid == 0) return 1;
+    if (password_store_is_admin(shell_current_uid)) return 1;
+    /* Regular user: check if CWD is at or under /home/<username> */
+    const char *cwd = shell_fat32_get_cwd_path();
+    char uname[32];
+    if (password_store_get_username(shell_current_uid, uname, 32) != 0 || !uname[0])
+        return 0;
+    /* Build expected prefix "/home/<username>" */
+    char prefix[64];
+    int pos = 0;
+    const char *hp = "/home/";
+    while (*hp) prefix[pos++] = *hp++;
+    for (int i = 0; uname[i] && pos < 62; i++) prefix[pos++] = uname[i];
+    prefix[pos] = '\0';
+    /* Case-insensitive prefix match */
+    for (int i = 0; i < pos; i++) {
+        if (!cwd[i]) return 0;
+        if (to_lower((unsigned char)cwd[i]) != to_lower((unsigned char)prefix[i]))
+            return 0;
+    }
+    /* CWD must be exactly the prefix or have a '/' after it */
+    if (cwd[pos] == '\0' || cwd[pos] == '/') return 1;
+    return 0;
+}
+
 /* Helper to return to kernel from usermode demo */
 static void return_to_kernel_demo(volatile uint64_t* rsp, volatile uint64_t* rbp, 
                                    volatile uint64_t* rip, volatile int* completed) {
@@ -145,7 +191,14 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_PASS_STORE:
             /* arg1 = username, arg2 = password */
-            return (uint64_t)password_store_add((const char*)arg1, (const char*)arg2);
+            {
+                int rc = password_store_add((const char*)arg1, (const char*)arg2);
+                if (rc == 0) {
+                    /* Create home directory for the new user */
+                    shell_fat32_ensure_home((const char*)arg1);
+                }
+                return (uint64_t)rc;
+            }
 
         case SYS_PASS_EXISTS:
             /* arg1 = username */
@@ -211,8 +264,19 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                 uart_puts("[SHELL] SYS_SETUID: permission denied\n");
                 return (uint64_t)-1;  /* EPERM */
             }
+            int was_guest = (_p->uid == (uint32_t)-1);
             _p->uid = (uint32_t)arg1;
             shell_current_uid = (int)arg1;  /* keep legacy shell var in sync */
+            /* Auto-cd to home dir on login */
+            if (was_guest && shell_current_uid >= 0) {
+                char _uname[32];
+                if (password_store_get_username(shell_current_uid, _uname, 32) == 0 && _uname[0])
+                    shell_fat32_cd_to_home(_uname);
+            }
+            /* On logout, cd back to root */
+            if (shell_current_uid < 0) {
+                shell_fat32_cd_to_home("guest");
+            }
             uart_puts("[SHELL] UID set to ");
             uart_putu(_p->uid);
             uart_puts("\n");
@@ -418,14 +482,17 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         case SYS_FAT32_WRITE:
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
             shell_fat32_write((const char *)arg1);
             return 0;
 
         case SYS_FAT32_MKDIR:
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
             shell_fat32_mkdir((const char *)arg1);
             return 0;
 
         case SYS_FAT32_RM:
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
             shell_fat32_rm((const char *)arg1);
             return 0;
 
@@ -434,14 +501,17 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         case SYS_FAT32_RENAME:
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
             shell_fat32_rename((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CHMOD:
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
             shell_fat32_chmod((const char *)arg1);
             return 0;
 
         case SYS_FAT32_TOUCH:
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
             shell_fat32_touch((const char *)arg1);
             return 0;
 
@@ -550,6 +620,61 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
              * arg1 = socket fd
              * returns: 0 on success, negative SOCK_ERR_* on failure */
             return (uint64_t)(int64_t)sock_close((int)arg1);
+
+        case SYS_SHUTDOWN:
+            shutdown_system();
+            return 0;  /* never reached */
+
+        case SYS_PASS_CHANGE:
+            /* arg1 = old_password, arg2 = new_password; acts on current logged-in user */
+            if (shell_current_uid < 0) return (uint64_t)-1;
+            return (uint64_t)password_store_change_password(
+                shell_current_uid, (const char*)arg1, (const char*)arg2);
+
+        case SYS_PASS_DELETE: {
+            /* arg1 = cmdline "userdel <username>"; only admins may do this */
+            if (shell_current_uid < 0 || !password_store_is_admin(shell_current_uid)) {
+                uart_puts("[KERNEL] userdel: permission denied\n");
+                return (uint64_t)-1;
+            }
+            const char *del_name = skip_to_arg1((const char*)arg1);
+            if (!del_name) return (uint64_t)-1;
+            int del_uid = password_store_get_uid(del_name);
+            if (del_uid < 0) return (uint64_t)-1;
+            return (uint64_t)password_store_delete(del_uid);
+        }
+
+        case SYS_PROMOTE_USER: {
+            /* arg1 = cmdline "promote <username>"; only admins may do this */
+            if (shell_current_uid < 0 || !password_store_is_admin(shell_current_uid)) {
+                vga_write("[ERROR] Permission denied: admin only.\n");
+                return (uint64_t)-1;
+            }
+            const char *pname = skip_to_arg1((const char*)arg1);
+            if (!pname) { vga_write("[ERROR] Usage: promote <username>\n"); return (uint64_t)-1; }
+            int puid = password_store_get_uid(pname);
+            if (puid < 0) { vga_write("[ERROR] User not found.\n"); return (uint64_t)-1; }
+            if (puid == 0) { vga_write("[INFO] User is already root admin.\n"); return 0; }
+            password_store_set_admin(puid, 1);
+            vga_write("[OK] User promoted to admin.\n");
+            return 0;
+        }
+
+        case SYS_DEMOTE_USER: {
+            /* arg1 = cmdline "demote <username>"; only admins may do this */
+            if (shell_current_uid < 0 || !password_store_is_admin(shell_current_uid)) {
+                vga_write("[ERROR] Permission denied: admin only.\n");
+                return (uint64_t)-1;
+            }
+            const char *dname = skip_to_arg1((const char*)arg1);
+            if (!dname) { vga_write("[ERROR] Usage: demote <username>\n"); return (uint64_t)-1; }
+            int duid = password_store_get_uid(dname);
+            if (duid < 0) { vga_write("[ERROR] User not found.\n"); return (uint64_t)-1; }
+            if (duid == 0) { vga_write("[ERROR] Cannot demote root admin.\n"); return (uint64_t)-1; }
+            password_store_set_admin(duid, 0);
+            vga_write("[OK] Admin privileges revoked.\n");
+            return 0;
+        }
 
         default:
             uart_puts("[KERNEL] Unknown syscall: ");

@@ -824,6 +824,10 @@ int shell_fs_dispatch(const char *cmdline) {
     char cmd[64];
     const char *args = next_token(cmdline, cmd, 64);
 
+    /* Lowercase the command word for case-insensitive matching */
+    for (int i = 0; cmd[i]; i++)
+        if (cmd[i] >= 'A' && cmd[i] <= 'Z') cmd[i] += 32;
+
     /* Check for empty command */
     if (cmd[0] == '\0') return 0;
 

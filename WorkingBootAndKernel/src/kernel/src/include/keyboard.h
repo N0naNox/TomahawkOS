@@ -15,4 +15,7 @@ void keyboard_poll_once(void);
 /* Reset keyboard buffer - use when buffer may be corrupted */
 void keyboard_reset_buffer(void);
 
+/* Shutdown the system (ACPI/QEMU debug exit) */
+void shutdown_system(void);
+
 #endif /* KEYBOARD_H */

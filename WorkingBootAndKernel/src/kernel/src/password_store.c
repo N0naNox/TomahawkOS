@@ -1,7 +1,9 @@
 /**
  * @file password_store.c
- * @brief Password hash storage implementation - stores credentials as SHA256 hashes
+ * @brief Password hash storage implementation - stores credentials as salted SHA256 hashes
  *        backed by /etc/shadow on the VFS for persistence across reboots.
+ *        Shadow format (per line):  username:SSSSSSSSSSSSSSSS:HHHH...H
+ *        where S = 16 hex chars (8-byte salt) and H = 64 hex chars (SHA256 hash)
  */
 
 #include "include/password_store.h"
@@ -9,17 +11,22 @@
 #include "include/vfs.h"
 #include "include/vnode.h"
 #include "include/inode.h"
+#include "include/timer.h"
 #include "uart.h"
 
 /* Define LONESHA256_STATIC so the implementation is included here */
 #define LONESHA256_STATIC
 #include "include/sha256.h"
 
+#define SALT_SIZE 8   /* 8 bytes = 16 hex chars */
+
 /* User entry structure */
 typedef struct {
     char username[MAX_USERNAME_LEN];
+    uint8_t salt[SALT_SIZE];
     uint8_t password_hash[SHA256_HASH_SIZE];
     int used;
+    int is_admin;  /* 1 = admin privileges, 0 = regular user */
 } user_entry_t;
 
 /* In-RAM user database */
@@ -27,10 +34,28 @@ static user_entry_t user_db[MAX_USERS];
 static int user_count = 0;
 static int initialized = 0;
 
-/* Helper: compute SHA256 hash of a string */
-static void compute_hash(const char* password, uint8_t out_hash[SHA256_HASH_SIZE]) {
-    size_t len = strlen(password);
-    lonesha256(out_hash, (const unsigned char*)password, len);
+/* Helper: generate 8 random salt bytes using timer_ticks + a simple LCG */
+static void generate_salt(const char* username, uint8_t out[SALT_SIZE]) {
+    /* Seed from timer ticks XOR'd with username bytes for uniqueness */
+    uint64_t seed = timer_ticks;
+    for (int i = 0; username[i]; i++)
+        seed = seed * 6364136223846793005ULL + (uint8_t)username[i];
+    for (int i = 0; i < SALT_SIZE; i++) {
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        out[i] = (uint8_t)(seed >> 33);
+    }
+}
+
+/* Helper: compute SHA256 hash of salt+password concatenated */
+static void compute_salted_hash(const char* password, const uint8_t salt[SALT_SIZE],
+                                uint8_t out_hash[SHA256_HASH_SIZE]) {
+    /* Build salted input: 8 salt bytes + password bytes */
+    static uint8_t buf[SALT_SIZE + 256];
+    size_t plen = strlen(password);
+    if (plen > 255) plen = 255;
+    for (int i = 0; i < SALT_SIZE; i++) buf[i] = salt[i];
+    for (size_t i = 0; i < plen; i++) buf[SALT_SIZE + i] = (uint8_t)password[i];
+    lonesha256(out_hash, buf, SALT_SIZE + plen);
 }
 
 /* Helper: compare two hashes */
@@ -71,6 +96,14 @@ static void hash_to_hex(const uint8_t hash[SHA256_HASH_SIZE], char *out) {
     }
 }
 
+/* Encode arbitrary N bytes to hex. out must have N*2 chars available. */
+static void hash_to_hex_n(const uint8_t *data, int n, char *out) {
+    for (int i = 0; i < n; i++) {
+        out[i * 2]     = hex_chars[(data[i] >> 4) & 0xF];
+        out[i * 2 + 1] = hex_chars[ data[i]       & 0xF];
+    }
+}
+
 /* Decode a single hex digit, returns 0-15 or -1 on error */
 static int hex_digit(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -94,14 +127,15 @@ static int hex_to_hash(const char *hex, uint8_t out[SHA256_HASH_SIZE]) {
 
 #define SHADOW_PATH "/mnt/fat/SHADOW.DAT"
 
-/* Save all current users to the persistent FAT32 shadow file */
+/* Save all current users to the persistent FAT32 shadow file.
+ * Format: username:SSSSSSSSSSSSSSSS:HHHH...H:A  (salt 16 hex + hash 64 hex + admin flag) */
 static void save_shadow(void) {
     /* Build the file content in a static buffer */
     static char buf[8192];
     int pos = 0;
 
     /* Write each used entry */
-    for (int i = 0; i < MAX_USERS && pos < (int)sizeof(buf) - 128; i++) {
+    for (int i = 0; i < MAX_USERS && pos < (int)sizeof(buf) - 160; i++) {
         if (!user_db[i].used) continue;
 
         /* username */
@@ -110,11 +144,23 @@ static void save_shadow(void) {
 
         buf[pos++] = ':';
 
-        /* hex hash */
-        char hex[SHA256_HASH_SIZE * 2];
-        hash_to_hex(user_db[i].password_hash, hex);
+        /* hex salt (16 chars) */
+        char salt_hex[SALT_SIZE * 2];
+        hash_to_hex_n(user_db[i].salt, SALT_SIZE, salt_hex);
+        for (int j = 0; j < SALT_SIZE * 2; j++)
+            buf[pos++] = salt_hex[j];
+
+        buf[pos++] = ':';
+
+        /* hex hash (64 chars) */
+        char hash_hex[SHA256_HASH_SIZE * 2];
+        hash_to_hex(user_db[i].password_hash, hash_hex);
         for (int j = 0; j < SHA256_HASH_SIZE * 2; j++)
-            buf[pos++] = hex[j];
+            buf[pos++] = hash_hex[j];
+
+        /* admin flag */
+        buf[pos++] = ':';
+        buf[pos++] = user_db[i].is_admin ? '1' : '0';
 
         buf[pos++] = '\n';
     }
@@ -200,39 +246,80 @@ void password_store_load_shadow(void) {
         /* Skip comment lines */
         if (buf[line_start] == '#') continue;
 
-        /* Find the colon separator */
-        int colon = -1;
+        /* Find separator colons */
+        int colon1 = -1, colon2 = -1, colon3 = -1;
         for (int i = line_start; i < line_end; i++) {
-            if (buf[i] == ':') { colon = i; break; }
+            if (buf[i] == ':') {
+                if (colon1 < 0) colon1 = i;
+                else if (colon2 < 0) colon2 = i;
+                else if (colon3 < 0) { colon3 = i; break; }
+            }
         }
-        if (colon < 0) continue;  /* malformed line */
+        if (colon1 < 0) continue;  /* malformed line */
 
-        int name_len = colon - line_start;
-        int hash_len = line_end - colon - 1;
+        int name_len = colon1 - line_start;
+        if (name_len <= 0 || name_len >= MAX_USERNAME_LEN) continue;
+
+        uint8_t salt[SALT_SIZE] = {0};
+        uint8_t hash[SHA256_HASH_SIZE];
+        const char *hash_start;
+        int hash_len;
+        int admin_flag = 0;
+
+        if (colon2 > 0) {
+            /* New format: username:salt16:hash64[:admin] */
+            int salt_len = colon2 - colon1 - 1;
+            if (colon3 > 0) {
+                /* Has admin flag field */
+                hash_start = &buf[colon2 + 1];
+                hash_len = colon3 - colon2 - 1;
+                if (colon3 + 1 < line_end)
+                    admin_flag = (buf[colon3 + 1] == '1') ? 1 : 0;
+            } else {
+                hash_start = &buf[colon2 + 1];
+                hash_len = line_end - colon2 - 1;
+            }
+            if (salt_len != SALT_SIZE * 2) continue;
+            /* Decode salt */
+            for (int i = 0; i < SALT_SIZE; i++) {
+                int hi = hex_digit(buf[colon1 + 1 + i * 2]);
+                int lo = hex_digit(buf[colon1 + 1 + i * 2 + 1]);
+                if (hi < 0 || lo < 0) goto next_line;
+                salt[i] = (uint8_t)((hi << 4) | lo);
+            }
+        } else {
+            /* Legacy format: username:hash64 (no salt) */
+            hash_start = &buf[colon1 + 1];
+            hash_len = line_end - colon1 - 1;
+        }
 
         /* Skip entries with no password (e.g. "guest:*") */
-        if (hash_len == 1 && buf[colon + 1] == '*') continue;
+        if (hash_len == 1 && hash_start[0] == '*') continue;
 
         /* Hash must be exactly 64 hex chars */
         if (hash_len != SHA256_HASH_SIZE * 2) continue;
-        if (name_len <= 0 || name_len >= MAX_USERNAME_LEN) continue;
 
         /* Decode the hash */
-        uint8_t hash[SHA256_HASH_SIZE];
-        if (hex_to_hash(&buf[colon + 1], hash) != 0) continue;
+        if (hex_to_hash(hash_start, hash) != 0) continue;
 
         /* Add to user_db */
-        int slot = user_count;
-        for (int j = 0; j < name_len; j++)
-            user_db[slot].username[j] = buf[line_start + j];
-        user_db[slot].username[name_len] = '\0';
-
-        for (int j = 0; j < SHA256_HASH_SIZE; j++)
-            user_db[slot].password_hash[j] = hash[j];
-
-        user_db[slot].used = 1;
-        user_count++;
-        loaded++;
+        {
+            int slot = user_count;
+            for (int j = 0; j < name_len; j++)
+                user_db[slot].username[j] = buf[line_start + j];
+            user_db[slot].username[name_len] = '\0';
+            for (int j = 0; j < SALT_SIZE; j++)
+                user_db[slot].salt[j] = salt[j];
+            for (int j = 0; j < SHA256_HASH_SIZE; j++)
+                user_db[slot].password_hash[j] = hash[j];
+            user_db[slot].used = 1;
+            /* uid 0 is always admin; others use the stored flag */
+            user_db[slot].is_admin = (slot == 0) ? 1 : admin_flag;
+            user_count++;
+            loaded++;
+        }
+        continue;
+        next_line:;
     }
 
     uart_puts("[PASSWORD_STORE] Loaded ");
@@ -253,8 +340,6 @@ void password_store_init(void) {
     user_count = 0;
     
     /* Add default admin user with password "1234" */
-    /* SHA256("1234") = 03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4 */
-    /* But we'll compute it properly */
     const char* admin_name = "admin";
     const char* admin_pass = "1234";
     
@@ -265,9 +350,11 @@ void password_store_init(void) {
     }
     user_db[0].username[i] = '\0';
     
-    /* Compute and store hash */
-    compute_hash(admin_pass, user_db[0].password_hash);
+    /* Generate salt and compute salted hash */
+    generate_salt(admin_name, user_db[0].salt);
+    compute_salted_hash(admin_pass, user_db[0].salt, user_db[0].password_hash);
     user_db[0].used = 1;
+    user_db[0].is_admin = 1;  /* uid 0 is always admin */
     user_count = 1;
     
     initialized = 1;
@@ -283,8 +370,9 @@ int password_store_add(const char* username, const char* password) {
     int idx = find_user(username);
     
     if (idx >= 0) {
-        /* Update existing user's password */
-        compute_hash(password, user_db[idx].password_hash);
+        /* Update existing user's password with a new salt */
+        generate_salt(username, user_db[idx].salt);
+        compute_salted_hash(password, user_db[idx].salt, user_db[idx].password_hash);
         uart_puts("[PASSWORD_STORE] Updated password for user: ");
         uart_puts(username);
         uart_puts("\n");
@@ -308,9 +396,11 @@ int password_store_add(const char* username, const char* password) {
             }
             user_db[i].username[j] = '\0';
             
-            /* Compute and store hash */
-            compute_hash(password, user_db[i].password_hash);
+            /* Generate salt and compute salted hash */
+            generate_salt(username, user_db[i].salt);
+            compute_salted_hash(password, user_db[i].salt, user_db[i].password_hash);
             user_db[i].used = 1;
+            user_db[i].is_admin = 0;  /* new users are not admin */
             user_count++;
             
             uart_puts("[PASSWORD_STORE] Added new user: ");
@@ -336,9 +426,9 @@ int password_store_verify(const char* username, const char* password) {
         return -1;
     }
     
-    /* Compute hash of provided password */
+    /* Compute salted hash of provided password */
     uint8_t computed_hash[SHA256_HASH_SIZE];
-    compute_hash(password, computed_hash);
+    compute_salted_hash(password, user_db[idx].salt, computed_hash);
     
     /* Compare with stored hash */
     if (hash_compare(computed_hash, user_db[idx].password_hash) == 0) {
@@ -385,5 +475,67 @@ int password_store_get_username(int uid, char* buf, int buf_size) {
         buf[i] = user_db[uid].username[i];
     }
     buf[i] = '\0';
+    return 0;
+}
+
+int password_store_delete(int uid) {
+    if (!initialized) password_store_init();
+    if (uid < 0 || uid >= MAX_USERS || !user_db[uid].used) {
+        uart_puts("[PASSWORD_STORE] Delete failed: invalid uid\n");
+        return -1;
+    }
+    /* Refuse to delete uid 0 (root/admin) */
+    if (uid == 0) {
+        uart_puts("[PASSWORD_STORE] Delete failed: cannot delete admin\n");
+        return -1;
+    }
+    user_db[uid].used = 0;
+    user_count--;
+    uart_puts("[PASSWORD_STORE] Deleted user uid=");
+    uart_puts(user_db[uid].username);
+    uart_puts("\n");
+    save_shadow();
+    return 0;
+}
+
+int password_store_change_password(int uid, const char* old_password, const char* new_password) {
+    if (!initialized) password_store_init();
+    if (!old_password || !new_password) return -1;
+    if (uid < 0 || uid >= MAX_USERS || !user_db[uid].used) return -1;
+
+    /* Verify old password */
+    uint8_t check[SHA256_HASH_SIZE];
+    compute_salted_hash(old_password, user_db[uid].salt, check);
+    if (hash_compare(check, user_db[uid].password_hash) != 0) {
+        uart_puts("[PASSWORD_STORE] change_password: wrong old password\n");
+        return -1;
+    }
+
+    /* Set new password with fresh salt */
+    generate_salt(user_db[uid].username, user_db[uid].salt);
+    compute_salted_hash(new_password, user_db[uid].salt, user_db[uid].password_hash);
+    save_shadow();
+    uart_puts("[PASSWORD_STORE] Password changed for uid=");
+    uart_puts(user_db[uid].username);
+    uart_puts("\n");
+    return 0;
+}
+
+int password_store_is_admin(int uid) {
+    if (!initialized) password_store_init();
+    if (uid == 0) return 1;  /* uid 0 is always admin */
+    if (uid < 0 || uid >= MAX_USERS || !user_db[uid].used) return 0;
+    return user_db[uid].is_admin;
+}
+
+int password_store_set_admin(int uid, int value) {
+    if (!initialized) password_store_init();
+    if (uid < 0 || uid >= MAX_USERS || !user_db[uid].used) return -1;
+    if (uid == 0) return 0;  /* uid 0 is always admin, no-op */
+    user_db[uid].is_admin = value ? 1 : 0;
+    save_shadow();
+    uart_puts("[PASSWORD_STORE] Admin flag for ");
+    uart_puts(user_db[uid].username);
+    uart_puts(value ? " = 1\n" : " = 0\n");
     return 0;
 }

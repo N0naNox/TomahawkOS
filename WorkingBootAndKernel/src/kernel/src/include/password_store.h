@@ -69,4 +69,35 @@ int password_store_get_uid(const char* username);
  */
 int password_store_get_username(int uid, char* buf, int buf_size);
 
+/**
+ * @brief Delete a user by UID (cannot delete uid 0/admin)
+ * @param uid The user ID to delete
+ * @return 0 on success, -1 on failure
+ */
+int password_store_delete(int uid);
+
+/**
+ * @brief Change a user's password after verifying the old one
+ * @param uid The user ID
+ * @param old_password Current password (must match)
+ * @param new_password New password to set
+ * @return 0 on success, -1 if old_password wrong or uid invalid
+ */
+int password_store_change_password(int uid, const char* old_password, const char* new_password);
+
+/**
+ * @brief Check if a user has admin privileges
+ * @param uid The user ID (uid 0 always returns 1)
+ * @return 1 if admin, 0 otherwise
+ */
+int password_store_is_admin(int uid);
+
+/**
+ * @brief Set or clear admin flag for a user
+ * @param uid The user ID (uid 0 cannot be changed)
+ * @param value 1 to grant admin, 0 to revoke
+ * @return 0 on success, -1 on failure
+ */
+int password_store_set_admin(int uid, int value);
+
 #endif /* PASSWORD_STORE_H */

@@ -80,3 +80,12 @@
 #define SYS_SEND        85   /* send(fd, buf, len) -> bytes            */
 #define SYS_RECV        86   /* recv(fd, buf, maxlen) -> bytes         */
 #define SYS_SOCK_CLOSE  87   /* sock_close(fd) -> 0 or err            */
+
+/* System power */
+#define SYS_SHUTDOWN    90   /* shutdown the machine                   */
+
+/* User/password management */
+#define SYS_PASS_CHANGE 91   /* change own password (old, new)         */
+#define SYS_PASS_DELETE 92   /* delete a user by name (root only)      */
+#define SYS_PROMOTE_USER 93  /* grant admin to user (admin only)       */
+#define SYS_DEMOTE_USER  94  /* revoke admin from user (admin only)    */

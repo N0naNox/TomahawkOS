@@ -22,6 +22,7 @@
 #include "include/init_config.h"
 #include "include/ata.h"
 #include "include/fat32.h"
+#include "include/password_store.h"
 
 extern volatile int demo_stop_requested;
 extern void demo_esc_watcher(void);
@@ -899,6 +900,25 @@ void run_block_device_demo(void) {
 static struct vnode *g_fat32_root = NULL;
 static struct vnode *g_fat32_cwd  = NULL;
 static int           g_fat32_mounted = 0;
+static char          g_fat32_cwd_path[256] = "/";
+
+/* Forward declaration — defined after umount */
+void shell_fat32_ensure_home(const char *username);
+
+/* Create /home, /home/guest, and /home/<username> for every registered user */
+static void ensure_all_home_dirs(void) {
+    /* Ensure /home/guest */
+    shell_fat32_ensure_home("guest");
+    /* Ensure a home dir for every registered user */
+    int count = password_store_get_count();
+    for (int uid = 0; uid < MAX_USERS && count > 0; uid++) {
+        char uname[MAX_USERNAME_LEN];
+        if (password_store_get_username(uid, uname, MAX_USERNAME_LEN) == 0 && uname[0]) {
+            shell_fat32_ensure_home(uname);
+            count--;
+        }
+    }
+}
 
 /*
  * Extract argument N (1-based) from a command line string into buf[max].
@@ -1007,7 +1027,9 @@ void shell_fat32_mount(const char *cmdline) {
         g_fat32_root = auto_root;
         g_fat32_cwd  = auto_root;
         g_fat32_mounted = 1;
+        g_fat32_cwd_path[0] = '/'; g_fat32_cwd_path[1] = '\0';
         vga_write("[OK] Using auto-mounted FAT32 volume.\n");
+        ensure_all_home_dirs();
         return;
     }
     vga_write("Initializing ATA driver... ");
@@ -1026,7 +1048,9 @@ void shell_fat32_mount(const char *cmdline) {
     }
     g_fat32_cwd = g_fat32_root;
     g_fat32_mounted = 1;
+    g_fat32_cwd_path[0] = '/'; g_fat32_cwd_path[1] = '\0';
     vga_write("[OK]\n");
+    ensure_all_home_dirs();
 }
 
 /* --- umount --- */
@@ -1041,7 +1065,45 @@ void shell_fat32_umount(const char *cmdline) {
     g_fat32_root = NULL;
     g_fat32_cwd  = NULL;
     g_fat32_mounted = 0;
+    g_fat32_cwd_path[0] = '/'; g_fat32_cwd_path[1] = '\0';
     vga_write("[OK] Volume unmounted.\n");
+}
+
+/* --- CWD path getter (used by syscall.c for permission checks) --- */
+const char *shell_fat32_get_cwd_path(void) {
+    return g_fat32_cwd_path;
+}
+
+/* --- Ensure /home/<username> exists on the FAT32 volume --- */
+void shell_fat32_ensure_home(const char *username) {
+    if (!g_fat32_mounted || !g_fat32_root || !username || !username[0]) return;
+    /* Ensure /home exists */
+    struct vnode *home_dir = NULL;
+    if (vfs_lookup(g_fat32_root, "home", &home_dir) != 0 || !home_dir) {
+        if (vfs_mkdir(g_fat32_root, "home", &home_dir) != 0 || !home_dir) return;
+    }
+    /* Ensure /home/<username> exists */
+    struct vnode *user_dir = NULL;
+    if (vfs_lookup(home_dir, username, &user_dir) != 0 || !user_dir) {
+        vfs_mkdir(home_dir, username, &user_dir);
+    }
+}
+
+/* --- Change CWD to /home/<username> --- */
+void shell_fat32_cd_to_home(const char *username) {
+    if (!g_fat32_mounted || !g_fat32_root || !username || !username[0]) return;
+    struct vnode *home_dir = NULL;
+    if (vfs_lookup(g_fat32_root, "home", &home_dir) != 0 || !home_dir) return;
+    struct vnode *user_dir = NULL;
+    if (vfs_lookup(home_dir, username, &user_dir) != 0 || !user_dir) return;
+    g_fat32_cwd = user_dir;
+    /* Build path "/home/<username>" */
+    int pos = 0;
+    const char *prefix = "/home/";
+    while (*prefix && pos < 254) g_fat32_cwd_path[pos++] = *prefix++;
+    for (int i = 0; username[i] && pos < 254; i++)
+        g_fat32_cwd_path[pos++] = username[i];
+    g_fat32_cwd_path[pos] = '\0';
 }
 
 /* --- ls --- */
@@ -1231,6 +1293,8 @@ void shell_fat32_cd(const char *cmdline) {
     }
     if (name[0] == '/' && name[1] == '\0') {
         g_fat32_cwd = g_fat32_root;
+        g_fat32_cwd_path[0] = '/';
+        g_fat32_cwd_path[1] = '\0';
         vga_write("[OK] Changed to /\n");
         return;
     }
@@ -1241,6 +1305,27 @@ void shell_fat32_cd(const char *cmdline) {
         return;
     }
     g_fat32_cwd = vp;
+    /* Update CWD path string */
+    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
+        /* Go up: strip last path component */
+        int len = 0;
+        while (g_fat32_cwd_path[len]) len++;
+        if (len > 1) {
+            int i = len - 1;
+            if (g_fat32_cwd_path[i] == '/') i--;
+            while (i > 0 && g_fat32_cwd_path[i] != '/') i--;
+            if (i == 0) { g_fat32_cwd_path[0] = '/'; g_fat32_cwd_path[1] = '\0'; }
+            else g_fat32_cwd_path[i] = '\0';
+        }
+    } else {
+        /* Append /name */
+        int len = 0;
+        while (g_fat32_cwd_path[len]) len++;
+        if (len > 1) g_fat32_cwd_path[len++] = '/';
+        for (int i = 0; name[i] && len < 254; i++)
+            g_fat32_cwd_path[len++] = name[i];
+        g_fat32_cwd_path[len] = '\0';
+    }
     vga_write("[OK] Changed directory.\n");
 }
 
@@ -1496,7 +1581,10 @@ void run_tomahawk_shell(void) {
         "  stat <p>  - Show file/dir info\n"
         "  pwd       - Print working directory\n"
         "  initconf  - Show loaded init configuration\n"
-        "  vfs       - Run VFS filesystem demo\n"
+        "  passwd    - Change your password\n"
+        "  userdel <user> - Delete a user account (admin only)\n"
+        "  promote <user> - Grant admin privileges (admin only)\n"
+        "  demote <user>  - Revoke admin privileges (admin only)\n"
         "  mount     - Mount FAT32 volume from ATA disk\n"
         "  umount    - Unmount FAT32 volume\n"
         "  ls        - List current FAT32 directory\n"
@@ -1516,7 +1604,7 @@ void run_tomahawk_shell(void) {
         "  httpget <domain> [/path] [port] - HTTP GET, prints response body\n"
         "                 e.g.  httpget jsonplaceholder.typicode.com /todos/1\n"
         "                       httpget 10.0.2.2 / 8080\n"
-        "  exit      - Exit shell and return to kernel\n\n")
+        "  exit      - Shutdown the system\n\n")
     /* Build prompts dynamically from init.conf (hostname= and username=) */
     const char *_cfg_host = init_config_get("hostname");
     const char *_cfg_user = init_config_get("username");
@@ -1556,7 +1644,7 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_not_logged, "[INFO] Not logged in.\n")
     PLACE_STR(s_already_logged, "[INFO] Already logged in. Logout first.\n")
     PLACE_STR(s_unknown, "[ERROR] Unknown command. Type 'help' for available commands.\n")
-    PLACE_STR(s_bye, "\nGoodbye! Returning to kernel...\n")
+    PLACE_STR(s_bye, "\nShutting down...\n")
     PLACE_STR(s_nl, "\n")
     PLACE_STR(s_cmd_help, "help")
     PLACE_STR(s_cmd_login, "login")
@@ -1565,8 +1653,15 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_cmd_whoami, "whoami")
     PLACE_STR(s_cmd_clear, "clear")
     PLACE_STR(s_cmd_exit, "exit")
-    PLACE_STR(s_cmd_vfs, "vfs")
     PLACE_STR(s_cmd_tests, "tests")
+    PLACE_STR(s_cmd_passwd, "passwd")
+    PLACE_STR(s_cmd_userdel, "userdel")
+    PLACE_STR(s_old_pass, "Old password: ")
+    PLACE_STR(s_new_pass, "New password: ")
+    PLACE_STR(s_pass_changed, "\n[OK] Password changed.\n")
+    PLACE_STR(s_pass_wrong, "\n[FAIL] Wrong password.\n")
+    PLACE_STR(s_userdel_ok, "\n[OK] User deleted.\n")
+    PLACE_STR(s_userdel_fail, "\n[FAIL] Could not delete user.\n")
     PLACE_STR(s_cmd_forkwait, "forkwait")
     PLACE_STR(s_cmd_mount, "mount")
     PLACE_STR(s_cmd_umount, "umount")
@@ -1579,6 +1674,8 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_cmd_rename, "rename")
     PLACE_STR(s_cmd_chmod, "chmod")
     PLACE_STR(s_cmd_touch, "touch")
+    PLACE_STR(s_cmd_promote, "promote")
+    PLACE_STR(s_cmd_demote, "demote")
     PLACE_STR(s_cancelled, "[INFO] Cancelled.\n")
     PLACE_STR(s_demo_done, "\n[Demo complete. Press any key to continue...]\n")
     
@@ -1668,6 +1765,39 @@ void run_tomahawk_shell(void) {
     }
     
     /* ===== COMMAND PARSING ===== */
+    /* Lowercase the command word (up to first space or NUL) so all
+       comparisons below are case-insensitive for the command name.
+       Arguments after the space are left untouched.                */
+    p = emit_mov64(p, 12, cmdbuf);       /* r12 = cmdbuf ptr */
+    {
+        uint8_t *lc_loop = p;
+        /* mov al, [r12] */
+        *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
+        /* test al, al → done if NUL */
+        *p++ = 0x84; *p++ = 0xC0;
+        *p++ = 0x74; uint8_t *lc_done = p; *p++ = 0x00; /* je lc_done */
+        /* cmp al, 0x20 → done if space */
+        *p++ = 0x3C; *p++ = 0x20;
+        *p++ = 0x74; uint8_t *lc_done2 = p; *p++ = 0x00; /* je lc_done */
+        /* if al >= 'A' && al <= 'Z', add 0x20 */
+        *p++ = 0x3C; *p++ = 0x41; /* cmp al, 'A' */
+        *p++ = 0x72; *p++ = 0x08; /* jb skip_lower (8 bytes ahead) */
+        *p++ = 0x3C; *p++ = 0x5A; /* cmp al, 'Z' */
+        *p++ = 0x77; *p++ = 0x04; /* ja skip_lower (4 bytes ahead) */
+        *p++ = 0x04; *p++ = 0x20; /* add al, 0x20 */
+        /* mov [r12], al */
+        *p++ = 0x41; *p++ = 0x88; *p++ = 0x04; *p++ = 0x24;
+        /* skip_lower: inc r12 */
+        *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
+        /* jmp lc_loop */
+        *p++ = 0xEB;
+        int8_t lc_off = (int8_t)(lc_loop - p - 1);
+        *p++ = (uint8_t)lc_off;
+        /* lc_done: patch both exit jumps */
+        *lc_done = (uint8_t)(p - lc_done - 1);
+        *lc_done2 = (uint8_t)(p - lc_done2 - 1);
+    }
+
     /* Compare cmdbuf with each command */
     
     /* Check "help" */
@@ -1710,7 +1840,7 @@ void run_tomahawk_shell(void) {
     *p++ = (uint8_t)cmp_exit_off;
     *is_exit = (uint8_t)(p - is_exit - 1);
     p = emit_print(p, s_bye, s_bye_len);
-    p = emit_syscall_only(p, 20); /* SYS_SHELL_EXIT */
+    p = emit_syscall_only(p, 90); /* SYS_SHUTDOWN */
     *p++ = 0xEB; *p++ = 0xFE; /* infinite loop fallback */
     *not_exit = (uint8_t)(p - not_exit - 1);
     
@@ -1978,34 +2108,67 @@ void run_tomahawk_shell(void) {
         not_reg[3] = (off >> 24) & 0xFF;
     }
     
-    /* ===== Check "vfs" ===== */
+    /* ===== Check "passwd" ===== */
     p = emit_mov64(p, 12, cmdbuf);
-    p = emit_mov64(p, 13, s_cmd_vfs);
-    uint8_t *cmp_vfs = p;
+    p = emit_mov64(p, 13, s_cmd_passwd);
+    uint8_t *cmp_passwd = p;
     *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
     *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
     *p++ = 0x38; *p++ = 0xD8;
-    *p++ = 0x0F; *p++ = 0x85; uint8_t *not_vfs = p; p += 4; /* JNE near */
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *not_passwd = p; p += 4; /* JNE near */
     *p++ = 0x84; *p++ = 0xC0;
-    *p++ = 0x74; uint8_t *is_vfs = p; *p++ = 0x00;
+    *p++ = 0x74; uint8_t *is_passwd = p; *p++ = 0x00;
     *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
     *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
     *p++ = 0xEB;
-    int8_t cmp_vfs_off = (int8_t)(cmp_vfs - p - 1);
-    *p++ = (uint8_t)cmp_vfs_off;
-    *is_vfs = (uint8_t)(p - is_vfs - 1);
-    /* Call syscall 25 (SYS_RUN_VFS_DEMO) */
-    p = emit_syscall_only(p, 25);
-    p = emit_print(p, s_demo_done, s_demo_done_len);
-    p = emit_syscall_only(p, 14);
-    *p++ = 0xE9; uint8_t *jloop_vfs = p; p += 4;
-    /* Patch not_vfs */
+    int8_t cmp_passwd_off = (int8_t)(cmp_passwd - p - 1);
+    *p++ = (uint8_t)cmp_passwd_off;
+    *is_passwd = (uint8_t)(p - is_passwd - 1);
+    /* Check if logged in */
+    p = emit_syscall_only(p, 16); /* SYS_GETUID */
+    *p++ = 0x48; *p++ = 0x83; *p++ = 0xF8; *p++ = 0x00; /* cmp rax, 0 */
+    *p++ = 0x0F; *p++ = 0x8D; uint8_t *passwd_ok_to_run = p; p += 4; /* JGE logged in */
+    p = emit_print(p, s_not_logged, s_not_logged_len);
+    *p++ = 0xE9; uint8_t *jloop_passwd_notlogged = p; p += 4;
+    { int32_t _o = (int32_t)(p - passwd_ok_to_run - 4); passwd_ok_to_run[0]=_o&0xFF; passwd_ok_to_run[1]=(_o>>8)&0xFF; passwd_ok_to_run[2]=(_o>>16)&0xFF; passwd_ok_to_run[3]=(_o>>24)&0xFF; }
+    /* Prompt for old password */
+    p = emit_print(p, s_old_pass, s_old_pass_len);
+    p = emit_mov64(p, 7, passbuf);
+    p = emit_mov64(p, 6, 64);
+    p = emit_syscall_only(p, 71); /* SYS_READLINE_MASKED */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x0F; *p++ = 0x88; uint8_t *passwd_esc1 = p; p += 4; /* JS -> cancel */
+    /* Prompt for new password */
+    p = emit_print(p, s_new_pass, s_new_pass_len);
+    p = emit_mov64(p, 7, userbuf);
+    p = emit_mov64(p, 6, 64);
+    p = emit_syscall_only(p, 71); /* SYS_READLINE_MASKED */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x0F; *p++ = 0x88; uint8_t *passwd_esc2 = p; p += 4; /* JS -> cancel */
+    /* Call SYS_PASS_CHANGE (91): rdi=old_pass, rsi=new_pass */
+    p = emit_mov64(p, 7, passbuf);
+    p = emit_mov64(p, 6, userbuf);
+    p = emit_syscall_only(p, 91);
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *passwd_fail = p; p += 4; /* JNZ -> failed */
+    p = emit_print(p, s_pass_changed, s_pass_changed_len);
+    *p++ = 0xE9; uint8_t *jloop_passwd = p; p += 4;
+    /* Failed */
+    { int32_t _o = (int32_t)(p - passwd_fail - 4); passwd_fail[0]=_o&0xFF; passwd_fail[1]=(_o>>8)&0xFF; passwd_fail[2]=(_o>>16)&0xFF; passwd_fail[3]=(_o>>24)&0xFF; }
+    p = emit_print(p, s_pass_wrong, s_pass_wrong_len);
+    *p++ = 0xE9; uint8_t *jloop_passwd2 = p; p += 4;
+    /* ESC cancel */
+    { int32_t _o = (int32_t)(p - passwd_esc1 - 4); passwd_esc1[0]=_o&0xFF; passwd_esc1[1]=(_o>>8)&0xFF; passwd_esc1[2]=(_o>>16)&0xFF; passwd_esc1[3]=(_o>>24)&0xFF; }
+    { int32_t _o = (int32_t)(p - passwd_esc2 - 4); passwd_esc2[0]=_o&0xFF; passwd_esc2[1]=(_o>>8)&0xFF; passwd_esc2[2]=(_o>>16)&0xFF; passwd_esc2[3]=(_o>>24)&0xFF; }
+    p = emit_print(p, s_cancelled, s_cancelled_len);
+    *p++ = 0xE9; uint8_t *jloop_passwd_cancel = p; p += 4;
+    /* Patch not_passwd */
     {
-        int32_t off = (int32_t)(p - not_vfs - 4);
-        not_vfs[0] = off & 0xFF;
-        not_vfs[1] = (off >> 8) & 0xFF;
-        not_vfs[2] = (off >> 16) & 0xFF;
-        not_vfs[3] = (off >> 24) & 0xFF;
+        int32_t off = (int32_t)(p - not_passwd - 4);
+        not_passwd[0] = off & 0xFF;
+        not_passwd[1] = (off >> 8) & 0xFF;
+        not_passwd[2] = (off >> 16) & 0xFF;
+        not_passwd[3] = (off >> 24) & 0xFF;
     }
     
     /* ===== Check "tests" ===== */
@@ -2143,18 +2306,24 @@ void run_tomahawk_shell(void) {
     uint8_t *jloop_rename, *not_rename;
     uint8_t *jloop_chmod, *not_chmod;
     uint8_t *jloop_touch, *not_touch;
+    uint8_t *jloop_userdel, *not_userdel;
+    uint8_t *jloop_promote, *not_promote;
+    uint8_t *jloop_demote, *not_demote;
 
-    EMIT_SIMPLE_CMD(s_cmd_mount,  50, jloop_mount,  not_mount);
-    EMIT_SIMPLE_CMD(s_cmd_umount, 51, jloop_umount, not_umount);
-    EMIT_SIMPLE_CMD(s_cmd_ls,     52, jloop_ls,     not_ls);
-    EMIT_SIMPLE_CMD(s_cmd_cat,    53, jloop_cat,    not_cat);
-    EMIT_SIMPLE_CMD(s_cmd_write,  54, jloop_write,  not_write);
-    EMIT_SIMPLE_CMD(s_cmd_mkdir,  55, jloop_mkdir,  not_mkdir);
-    EMIT_SIMPLE_CMD(s_cmd_rm,     56, jloop_rm,     not_rm);
-    EMIT_SIMPLE_CMD(s_cmd_cd,     57, jloop_cd,     not_cd);
-    EMIT_SIMPLE_CMD(s_cmd_rename, 58, jloop_rename, not_rename);
-    EMIT_SIMPLE_CMD(s_cmd_chmod,  59, jloop_chmod,  not_chmod);
-    EMIT_SIMPLE_CMD(s_cmd_touch,  61, jloop_touch,  not_touch);
+    EMIT_SIMPLE_CMD(s_cmd_mount,   50, jloop_mount,   not_mount);
+    EMIT_SIMPLE_CMD(s_cmd_umount,  51, jloop_umount,  not_umount);
+    EMIT_SIMPLE_CMD(s_cmd_ls,      52, jloop_ls,      not_ls);
+    EMIT_SIMPLE_CMD(s_cmd_cat,     53, jloop_cat,     not_cat);
+    EMIT_SIMPLE_CMD(s_cmd_write,   54, jloop_write,   not_write);
+    EMIT_SIMPLE_CMD(s_cmd_mkdir,   55, jloop_mkdir,   not_mkdir);
+    EMIT_SIMPLE_CMD(s_cmd_rm,      56, jloop_rm,      not_rm);
+    EMIT_SIMPLE_CMD(s_cmd_cd,      57, jloop_cd,      not_cd);
+    EMIT_SIMPLE_CMD(s_cmd_rename,  58, jloop_rename,  not_rename);
+    EMIT_SIMPLE_CMD(s_cmd_chmod,   59, jloop_chmod,   not_chmod);
+    EMIT_SIMPLE_CMD(s_cmd_touch,   61, jloop_touch,   not_touch);
+    EMIT_SIMPLE_CMD(s_cmd_userdel, 92, jloop_userdel, not_userdel);
+    EMIT_SIMPLE_CMD(s_cmd_promote, 93, jloop_promote, not_promote);
+    EMIT_SIMPLE_CMD(s_cmd_demote,  94, jloop_demote,  not_demote);
 
     #undef EMIT_SIMPLE_CMD
     
@@ -2229,7 +2398,10 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP(jloop10);
     PATCH_JLOOP(jloop_login_cancel);
     PATCH_JLOOP(jloop_reg_cancel);
-    PATCH_JLOOP(jloop_vfs);
+    PATCH_JLOOP(jloop_passwd);
+    PATCH_JLOOP(jloop_passwd2);
+    PATCH_JLOOP(jloop_passwd_notlogged);
+    PATCH_JLOOP(jloop_passwd_cancel);
     PATCH_JLOOP(jloop_tests);
     
     #undef PATCH_JLOOP
@@ -2256,6 +2428,9 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP_P3(jloop_rename);
     PATCH_JLOOP_P3(jloop_chmod);
     PATCH_JLOOP_P3(jloop_touch);
+    PATCH_JLOOP_P3(jloop_userdel);
+    PATCH_JLOOP_P3(jloop_promote);
+    PATCH_JLOOP_P3(jloop_demote);
     PATCH_JLOOP_P3(jloop_forkwait);
     PATCH_JLOOP_P3(jloop_shellcmd);
     
