@@ -16,27 +16,6 @@
 #include <memory_map.h>
 
 /**
- * Preferred resolutions in priority order.
- * The bootloader will scan GOP modes and pick the first match.
- * Fall back to the largest available BGRA mode if none match.
- */
-typedef struct {
-	UINT32 width;
-	UINT32 height;
-} Preferred_Resolution;
-
-static const Preferred_Resolution preferred_modes[] = {
-	{ 3840, 2160 },   /* 4K UHD */
-	{ 2560, 1440 },   /* 1440p */
-	{ 1920, 1080 },   /* 1080p */
-	{ 1024,  768 },   /* fallback */
-};
-#define NUM_PREFERRED_MODES (sizeof(preferred_modes) / sizeof(preferred_modes[0]))
-
-#define TARGET_PIXEL_FORMAT     PixelBlueGreenRedReserved8BitPerColor
-
-
-/**
  * File System Service instance.
  * Refer to definition in bootloader.h
  */
@@ -125,63 +104,42 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 			debug_print_line(L"Debug: GOP located, current mode: %u\n", gop->Mode->Mode);
 		#endif
 		
-		/* ---- Enumerate modes and pick the best resolution ---- */
-		UINTN num_modes = gop->Mode->MaxMode;
-		UINT32 best_mode = gop->Mode->Mode;   /* fallback: keep current */
-		UINT32 best_w = 0, best_h = 0;
-		int    best_pref = -1;   /* index into preferred_modes[], lower=better */
+		mode_info = gop->Mode->Info;
 		
-		for (UINTN m = 0; m < num_modes; m++) {
-			EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* info = NULL;
-			UINTN info_size = 0;
-			status = uefi_call_wrapper(gop->QueryMode, 4, gop, (UINT32)m, &info_size, &info);
-			if (EFI_ERROR(status) || info == NULL) continue;
+		/*
+		 * Check if the current mode is already BGRA (what our kernel needs).
+		 * If yes, use it — OVMF picked it based on xres/yres hints.
+		 * If not, scan all modes and pick the largest BGRA landscape mode.
+		 */
+		if (mode_info->PixelFormat != PixelBlueGreenRedReserved8BitPerColor) {
+			UINTN num_modes = gop->Mode->MaxMode;
+			UINT32 best_mode = gop->Mode->Mode;
+			UINT32 best_w = 0, best_h = 0;
 			
-			/* Only consider BGRA pixel format (our framebuffer code assumes this) */
-			if (info->PixelFormat != PixelBlueGreenRedReserved8BitPerColor) continue;
-			
-			UINT32 w = info->HorizontalResolution;
-			UINT32 h = info->VerticalResolution;
-			
-			#ifdef DEBUG
-				debug_print_line(L"  GOP mode %u: %ux%u (fmt %u)\n", (UINT32)m, w, h, info->PixelFormat);
-			#endif
-			
-			/* Check if this mode matches any preferred resolution */
-			for (UINTN p = 0; p < NUM_PREFERRED_MODES; p++) {
-				if (w == preferred_modes[p].width && h == preferred_modes[p].height) {
-					if (best_pref < 0 || (int)p < best_pref) {
-						best_pref = (int)p;
-						best_mode = (UINT32)m;
-						best_w = w;
-						best_h = h;
-					}
-					break;
+			for (UINTN m = 0; m < num_modes; m++) {
+				EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* info = NULL;
+				UINTN info_size = 0;
+				status = uefi_call_wrapper(gop->QueryMode, 4, gop, (UINT32)m, &info_size, &info);
+				if (EFI_ERROR(status) || info == NULL) continue;
+				if (info->PixelFormat != PixelBlueGreenRedReserved8BitPerColor) continue;
+				
+				UINT32 w = info->HorizontalResolution;
+				UINT32 h = info->VerticalResolution;
+				if (w < h) continue;  /* skip portrait modes */
+				
+				if ((w * h) > (best_w * best_h)) {
+					best_w = w;
+					best_h = h;
+					best_mode = (UINT32)m;
 				}
 			}
-			/* If no preferred match yet, track the largest available mode */
-			if (best_pref < 0 && (w * h) > (best_w * best_h)) {
-				best_w = w;
-				best_h = h;
-				best_mode = (UINT32)m;
+			
+			if (best_w > 0) {
+				uefi_call_wrapper(gop->SetMode, 2, gop, best_mode);
+				mode_info = gop->Mode->Info;
 			}
 		}
 		
-		/* Set the chosen mode */
-		if (best_mode != gop->Mode->Mode) {
-			status = uefi_call_wrapper(gop->SetMode, 2, gop, best_mode);
-			if (EFI_ERROR(status)) {
-				#ifdef DEBUG
-					debug_print_line(L"Debug: SetMode %u failed, keeping default\n", best_mode);
-				#endif
-			} else {
-				#ifdef DEBUG
-					debug_print_line(L"Debug: Set GOP mode %u (%ux%u)\n", best_mode, best_w, best_h);
-				#endif
-			}
-		}
-		
-		mode_info = gop->Mode->Info;
 		#ifdef DEBUG
 			debug_print_line(L"Debug: Framebuffer at 0x%llx, %ux%u\n",
 				gop->Mode->FrameBufferBase,

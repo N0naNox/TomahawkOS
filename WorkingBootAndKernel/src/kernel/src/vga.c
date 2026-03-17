@@ -1,10 +1,9 @@
 /*
  * vga.c - Minimal VGA driver using GOP framebuffer
- * - Writes characters using scaled bitmap font
+ * - Writes characters using bitmap font
  * - Auto-selects font scale:
- *     scale 1 (8x16)  for resolutions up to 1024x768
- *     scale 2 (16x32) for 1080p / 1440p
- *     scale 3 (24x48) for 4K
+ *     scale 1 (8x16)  for resolutions up to 1080p
+ *     scale 2 (16x32) for 1440p and above
  * - Dynamic text grid sizing
  */
 
@@ -20,7 +19,7 @@ static uint32_t fb_height = 768;
 static uint32_t fb_pitch = 1024;
 
 /* Font metrics — computed in vga_init_fb */
-static uint32_t font_scale = 1;     /* 1, 2, or 3 */
+static uint32_t font_scale = 1;     /* 1 or 2 */
 static uint32_t char_w = 9;         /* pixel width of one cell  (8*scale + scale spacing) */
 static uint32_t char_h = 16;        /* pixel height of one cell (16*scale) */
 
@@ -40,19 +39,14 @@ void vga_init_fb(void* framebuffer, uint32_t width, uint32_t height, uint32_t pi
 	fb_pitch = pitch;
 
 	/* Auto-select font scale based on resolution */
-	if (width >= 3840 && height >= 2160) {
-		font_scale = 3;   /* 4K: native 24x48 glyphs */
-	} else if (width >= 1920 && height >= 1080) {
-		font_scale = 2;   /* 1080p/1440p: native 16x32 glyphs */
+	if (width >= 2560 && height >= 1440) {
+		font_scale = 2;   /* 1440p / 4K: native 16x32 glyphs */
 	} else {
-		font_scale = 1;   /* 1024x768 or smaller: 8x16 */
+		font_scale = 1;   /* 1080p and below: 8x16 */
 	}
 
 	/* Character cell size — native font dimensions + 1-col spacing */
-	if (font_scale >= 3) {
-		char_w = 24 + 3;   /* 27 pixels */
-		char_h = 48;
-	} else if (font_scale == 2) {
+	if (font_scale == 2) {
 		char_w = 16 + 2;   /* 18 pixels */
 		char_h = 32;
 	} else {
@@ -153,9 +147,7 @@ void vga_putc(char c) {
 		/* Draw character using native-resolution font */
 		uint32_t x = vga_col * char_w;
 		uint32_t y = vga_row * char_h;
-		if (font_scale >= 3) {
-			draw_char_24x48(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
-		} else if (font_scale == 2) {
+		if (font_scale == 2) {
 			draw_char_16x32(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
 		} else {
 			draw_char_8x16(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
@@ -180,9 +172,7 @@ void vga_draw_char_at(int row, int col, char c) {
 	if (!fb_buffer) return;
 	uint32_t x = (uint32_t)col * char_w;
 	uint32_t y = (uint32_t)row * char_h;
-	if (font_scale >= 3) {
-		draw_char_24x48(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
-	} else if (font_scale == 2) {
+	if (font_scale == 2) {
 		draw_char_16x32(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);
 	} else {
 		draw_char_8x16(fb_buffer, fb_pitch, c, x, y, fb_width, fb_height);

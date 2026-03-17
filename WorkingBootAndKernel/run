@@ -37,7 +37,8 @@ qemu-system-x86_64 \
     -drive file=./build/fat32test.img,format=raw,if=ide,index=0,media=disk \
     -serial stdio \
     -usb \
+    -vga none \
     -netdev user,id=n0,hostfwd=udp::4444-:4444 \
     -device e1000,netdev=n0 \
-    -device VGA,xres=$XRES,yres=$YRES \
+    -device VGA,xres=$XRES,yres=$YRES,vgamem_mb=64 \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04
