@@ -62,6 +62,7 @@ typedef struct tty {
     /* --- Flags --- */
     int   echo;                    /* non-zero: echo input to screen       */
     int   serial_echo;             /* non-zero: also echo to UART          */
+    char  echo_mask;               /* if non-zero, display this char instead of real chars (e.g. '*') */
 } tty_t;
 
 /* ====== Lifecycle ====== */
@@ -105,6 +106,14 @@ void tty_clear(tty_t *tty);
  * @return       Number of characters read (excluding NUL), or 0 on empty.
  */
 int tty_readline(tty_t *tty, char *buf, int maxlen);
+
+/**
+ * @brief Read one edited line with masked echo (e.g. password input).
+ *
+ * Same as tty_readline but displays mask_char (e.g. '*') for each typed char.
+ * Returns -1 on ESC.
+ */
+int tty_readline_masked(tty_t *tty, char *buf, int maxlen, char mask_char);
 
 /* ====== Cursor rendering helpers (used internally, exposed for tests) ====== */
 

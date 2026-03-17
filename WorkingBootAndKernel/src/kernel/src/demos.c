@@ -900,20 +900,65 @@ static struct vnode *g_fat32_root = NULL;
 static struct vnode *g_fat32_cwd  = NULL;
 static int           g_fat32_mounted = 0;
 
-/* Kernel-mode direct keyboard polling (same scancode map as SYS_GETCHAR) */
+/*
+ * Extract argument N (1-based) from a command line string into buf[max].
+ * Arg 0 is the command itself.  If is_rest is true, the last arg includes
+ * everything remaining (spaces and all).
+ * Returns the length copied, or 0 if not found.
+ */
+static int cmdline_get_arg(const char *cmdline, int n, char *buf, int max, int is_rest) {
+    if (!cmdline) { buf[0] = '\0'; return 0; }
+    const char *p = cmdline;
+    /* Skip to word N */
+    for (int i = 0; i < n; i++) {
+        while (*p && *p != ' ') p++;   /* skip current word */
+        while (*p == ' ') p++;         /* skip spaces */
+    }
+    if (!*p) { buf[0] = '\0'; return 0; }
+    int len = 0;
+    if (is_rest) {
+        while (*p && len < max - 1) buf[len++] = *p++;
+    } else {
+        while (*p && *p != ' ' && len < max - 1) buf[len++] = *p++;
+    }
+    buf[len] = '\0';
+    return len;
+}
+
+/* Kernel-mode direct keyboard polling with shift + CapsLock support */
 static char fat32_poll_char(void) {
-    static const char scancode_map[128] = {
+    static const char scancode_lower[128] = {
         0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
         'q','w','e','r','t','y','u','i','o','p','[',']','\n', 0, 'a','s',
         'd','f','g','h','j','k','l',';','\'','`', 0,'\\','z','x','c','v',
         'b','n','m',',','.','/', 0, '*', 0, ' ', 0, 0, 0, 0, 0, 0,
     };
+    static const char scancode_upper[128] = {
+        0,  27, '!','@','#','$','%','^','&','*','(',')','_','+','\b','\t',
+        'Q','W','E','R','T','Y','U','I','O','P','{','}','\n', 0, 'A','S',
+        'D','F','G','H','J','K','L',':','"','~', 0, '|','Z','X','C','V',
+        'B','N','M','<','>','?', 0, '*', 0, ' ', 0, 0, 0, 0, 0, 0,
+    };
+    static int shift_held = 0;
+    static int caps_lock  = 0;
     char c = 0;
     while (!c) {
         if (hal_inb(0x64) & 0x01) {
             uint8_t sc = hal_inb(0x60);
-            if (!(sc & 0x80) && sc < sizeof(scancode_map))
-                c = scancode_map[sc];
+            /* Shift press/release */
+            if (sc == 0x2A || sc == 0x36) { shift_held = 1; continue; }
+            if (sc == 0xAA || sc == 0xB6) { shift_held = 0; continue; }
+            /* CapsLock toggle */
+            if (sc == 0x3A) { caps_lock = !caps_lock; continue; }
+            /* Ignore break codes */
+            if (sc & 0x80) continue;
+            if (sc < sizeof(scancode_lower)) {
+                int use_shift = shift_held;
+                char lower = scancode_lower[sc];
+                if (caps_lock && lower >= 'a' && lower <= 'z')
+                    use_shift = !use_shift;
+                c = use_shift ? scancode_upper[sc] : scancode_lower[sc];
+            }
         }
         if (!c) __asm__ volatile("pause");
     }
@@ -925,7 +970,11 @@ static int fat32_read_line(char *buf, int max) {
     int pos = 0;
     while (pos < max - 1) {
         char c = fat32_poll_char();
-        if (c == 27) return -1;          /* ESC */
+        if (c == 27) {
+            vga_putc('\n');
+            vga_write("[INFO] Cancelled.\n");
+            return -1;
+        }
         if (c == '\n' || c == '\r') {
             buf[pos] = '\0';
             vga_putc('\n');
@@ -945,9 +994,20 @@ static int fat32_read_line(char *buf, int max) {
 }
 
 /* --- mount --- */
-void shell_fat32_mount(void) {
+void shell_fat32_mount(const char *cmdline) {
+    (void)cmdline;
     if (g_fat32_mounted) {
         vga_write("[INFO] FAT32 already mounted.\n");
+        return;
+    }
+    /* Check if FAT32 was auto-mounted at boot */
+    struct vnode *auto_root = NULL;
+    if (vfs_resolve_path("/mnt/fat", &auto_root) == 0 && auto_root &&
+        auto_root->v_type == VDIR && auto_root->v_mount_data != NULL) {
+        g_fat32_root = auto_root;
+        g_fat32_cwd  = auto_root;
+        g_fat32_mounted = 1;
+        vga_write("[OK] Using auto-mounted FAT32 volume.\n");
         return;
     }
     vga_write("Initializing ATA driver... ");
@@ -970,7 +1030,8 @@ void shell_fat32_mount(void) {
 }
 
 /* --- umount --- */
-void shell_fat32_umount(void) {
+void shell_fat32_umount(const char *cmdline) {
+    (void)cmdline;
     if (!g_fat32_mounted) {
         vga_write("[INFO] No FAT32 volume mounted.\n");
         return;
@@ -984,7 +1045,8 @@ void shell_fat32_umount(void) {
 }
 
 /* --- ls --- */
-void shell_fat32_ls(void) {
+void shell_fat32_ls(const char *cmdline) {
+    (void)cmdline;
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
@@ -1013,14 +1075,16 @@ void shell_fat32_ls(void) {
 }
 
 /* --- cat --- */
-void shell_fat32_cat(void) {
+void shell_fat32_cat(const char *cmdline) {
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
-    vga_write("Filename: ");
     char name[64];
-    if (fat32_read_line(name, 64) <= 0) return;
+    if (cmdline_get_arg(cmdline, 1, name, 64, 0) <= 0) {
+        vga_write("Filename: ");
+        if (fat32_read_line(name, 64) <= 0) return;
+    }
     struct vnode *vp = NULL;
     int rc = vfs_lookup(g_fat32_cwd, name, &vp);
     if (rc != 0 || !vp) {
@@ -1048,29 +1112,43 @@ void shell_fat32_cat(void) {
 }
 
 /* --- write --- */
-void shell_fat32_write(void) {
+void shell_fat32_write(const char *cmdline) {
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
-    vga_write("Filename: ");
     char name[64];
-    if (fat32_read_line(name, 64) <= 0) return;
-    /* Look up or create */
+    char content[256];
+    int have_args = 0;
+    if (cmdline_get_arg(cmdline, 1, name, 64, 0) > 0 &&
+        cmdline_get_arg(cmdline, 2, content, 256, 1) > 0) {
+        have_args = 1;
+    }
+    if (!have_args) {
+        vga_write("Filename: ");
+        if (fat32_read_line(name, 64) <= 0) return;
+    }
+    /* Remove existing file first to truncate, then create fresh */
     struct vnode *vp = NULL;
     int rc = vfs_lookup(g_fat32_cwd, name, &vp);
-    if (rc != 0 || !vp) {
-        rc = vfs_create(g_fat32_cwd, name, &vp);
-        if (rc != 0 || !vp) {
-            vga_write("[ERROR] Cannot create file.\n");
-            return;
-        }
-        vga_write("[OK] File created.\n");
+    if (rc == 0 && vp) {
+        vfs_remove(g_fat32_cwd, name);
+        vp = NULL;
     }
-    vga_write("Content: ");
-    char content[256];
-    int len = fat32_read_line(content, 256);
-    if (len < 0) return;
+    rc = vfs_create(g_fat32_cwd, name, &vp);
+    if (rc != 0 || !vp) {
+        vga_write("[ERROR] Cannot create file.\n");
+        return;
+    }
+    int len;
+    if (!have_args) {
+        vga_write("Content: ");
+        len = fat32_read_line(content, 256);
+        if (len < 0) return;
+    } else {
+        len = 0;
+        while (content[len]) len++;
+    }
     int wr = vfs_write_at(vp, content, (size_t)len, 0);
     char num[16];
     int_to_str(wr, num, 10);
@@ -1079,15 +1157,41 @@ void shell_fat32_write(void) {
     vga_write(" bytes.\n");
 }
 
-/* --- mkdir --- */
-void shell_fat32_mkdir(void) {
+/* --- touch --- */
+void shell_fat32_touch(const char *cmdline) {
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
-    vga_write("Directory name: ");
     char name[64];
-    if (fat32_read_line(name, 64) <= 0) return;
+    if (cmdline_get_arg(cmdline, 1, name, 64, 0) <= 0) {
+        vga_write("Filename: ");
+        if (fat32_read_line(name, 64) <= 0) return;
+    }
+    struct vnode *vp = NULL;
+    int rc = vfs_lookup(g_fat32_cwd, name, &vp);
+    if (rc == 0 && vp) {
+        vga_write("[OK] File already exists.\n");
+        return;
+    }
+    rc = vfs_create(g_fat32_cwd, name, &vp);
+    if (rc == 0 && vp)
+        vga_write("[OK] File created.\n");
+    else
+        vga_write("[ERROR] Cannot create file.\n");
+}
+
+/* --- mkdir --- */
+void shell_fat32_mkdir(const char *cmdline) {
+    if (!g_fat32_mounted) {
+        vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
+        return;
+    }
+    char name[64];
+    if (cmdline_get_arg(cmdline, 1, name, 64, 0) <= 0) {
+        vga_write("Directory name: ");
+        if (fat32_read_line(name, 64) <= 0) return;
+    }
     struct vnode *dir = NULL;
     int rc = vfs_mkdir(g_fat32_cwd, name, &dir);
     if (rc == 0)
@@ -1097,14 +1201,16 @@ void shell_fat32_mkdir(void) {
 }
 
 /* --- rm --- */
-void shell_fat32_rm(void) {
+void shell_fat32_rm(const char *cmdline) {
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
-    vga_write("Filename: ");
     char name[64];
-    if (fat32_read_line(name, 64) <= 0) return;
+    if (cmdline_get_arg(cmdline, 1, name, 64, 0) <= 0) {
+        vga_write("Filename: ");
+        if (fat32_read_line(name, 64) <= 0) return;
+    }
     int rc = vfs_remove(g_fat32_cwd, name);
     if (rc == 0)
         vga_write("[OK] Removed.\n");
@@ -1113,14 +1219,16 @@ void shell_fat32_rm(void) {
 }
 
 /* --- cd --- */
-void shell_fat32_cd(void) {
+void shell_fat32_cd(const char *cmdline) {
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
-    vga_write("Directory: ");
     char name[64];
-    if (fat32_read_line(name, 64) <= 0) return;
+    if (cmdline_get_arg(cmdline, 1, name, 64, 0) <= 0) {
+        vga_write("Directory: ");
+        if (fat32_read_line(name, 64) <= 0) return;
+    }
     if (name[0] == '/' && name[1] == '\0') {
         g_fat32_cwd = g_fat32_root;
         vga_write("[OK] Changed to /\n");
@@ -1137,14 +1245,22 @@ void shell_fat32_cd(void) {
 }
 
 /* --- rename --- */
-void shell_fat32_rename(void) {
+void shell_fat32_rename(const char *cmdline) {
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
-    vga_write("Old name: ");
     char old_name[64];
-    if (fat32_read_line(old_name, 64) <= 0) return;
+    char new_name[64];
+    int have_args = 0;
+    if (cmdline_get_arg(cmdline, 1, old_name, 64, 0) > 0 &&
+        cmdline_get_arg(cmdline, 2, new_name, 64, 0) > 0) {
+        have_args = 1;
+    }
+    if (!have_args) {
+        vga_write("Old name: ");
+        if (fat32_read_line(old_name, 64) <= 0) return;
+    }
 
     /* Verify the source exists */
     struct vnode *vp = NULL;
@@ -1154,9 +1270,10 @@ void shell_fat32_rename(void) {
         return;
     }
 
-    vga_write("New name: ");
-    char new_name[64];
-    if (fat32_read_line(new_name, 64) <= 0) return;
+    if (!have_args) {
+        vga_write("New name: ");
+        if (fat32_read_line(new_name, 64) <= 0) return;
+    }
 
     /* Remove old entry and create new entry pointing to same vnode.
        FAT32 remove + create achieves a rename within the same directory. */
@@ -1191,14 +1308,22 @@ void shell_fat32_rename(void) {
 }
 
 /* --- chmod --- */
-void shell_fat32_chmod(void) {
+void shell_fat32_chmod(const char *cmdline) {
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
-    vga_write("Filename: ");
     char name[64];
-    if (fat32_read_line(name, 64) <= 0) return;
+    char mode_str[16];
+    int have_args = 0;
+    if (cmdline_get_arg(cmdline, 1, name, 64, 0) > 0 &&
+        cmdline_get_arg(cmdline, 2, mode_str, 16, 0) > 0) {
+        have_args = 1;
+    }
+    if (!have_args) {
+        vga_write("Filename: ");
+        if (fat32_read_line(name, 64) <= 0) return;
+    }
 
     struct vnode *vp = NULL;
     int rc = vfs_lookup(g_fat32_cwd, name, &vp);
@@ -1207,9 +1332,10 @@ void shell_fat32_chmod(void) {
         return;
     }
 
-    vga_write("Mode (octal, e.g. 755): ");
-    char mode_str[16];
-    if (fat32_read_line(mode_str, 16) <= 0) return;
+    if (!have_args) {
+        vga_write("Mode (octal, e.g. 755): ");
+        if (fat32_read_line(mode_str, 16) <= 0) return;
+    }
 
     /* Parse octal mode string */
     uint16_t mode = 0;
@@ -1234,10 +1360,10 @@ void shell_fat32_chmod(void) {
 
 /* Keep the old demo function available */
 void run_fat32_demo(void) {
-    shell_fat32_mount();
+    shell_fat32_mount(NULL);
     if (!g_fat32_mounted) return;
-    shell_fat32_ls();
-    shell_fat32_umount();
+    shell_fat32_ls(NULL);
+    shell_fat32_umount(NULL);
 }
 
 /* ========== User Mode Password Demo ========== */
@@ -1452,6 +1578,8 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_cmd_cd, "cd")
     PLACE_STR(s_cmd_rename, "rename")
     PLACE_STR(s_cmd_chmod, "chmod")
+    PLACE_STR(s_cmd_touch, "touch")
+    PLACE_STR(s_cancelled, "[INFO] Cancelled.\n")
     PLACE_STR(s_demo_done, "\n[Demo complete. Press any key to continue...]\n")
     
     #undef PLACE_STR
@@ -1527,7 +1655,17 @@ void run_tomahawk_shell(void) {
     p = emit_mov64(p, 6, 126);      /* rsi = max length     */
     p = emit_syscall_only(p, 70);   /* SYS_READLINE         */
     /* rax = length of entered line; buffer is null-terminated.
-       SYS_READLINE already printed the trailing newline.        */
+       SYS_READLINE already printed the trailing newline.
+       If rax <= 0 (ESC or empty input), skip command parsing. */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
+    *p++ = 0x0F; *p++ = 0x8E;               /* jle near (rel32) */
+    {
+        int32_t off = (int32_t)(shell_loop - p - 4);
+        *p++ = off & 0xFF;
+        *p++ = (off >> 8) & 0xFF;
+        *p++ = (off >> 16) & 0xFF;
+        *p++ = (off >> 24) & 0xFF;
+    }
     
     /* ===== COMMAND PARSING ===== */
     /* Compare cmdbuf with each command */
@@ -1710,46 +1848,22 @@ void run_tomahawk_shell(void) {
     p = emit_print(p, s_already_logged, s_already_logged_len);
     *p++ = 0xE9; uint8_t *jloop6 = p; p += 4;
     *login_ok_to_login = (uint8_t)(p - login_ok_to_login - 1);
-    /* Prompt for username */
+    /* Prompt for username — uses SYS_READLINE for full QoL */
     p = emit_print(p, s_user, s_user_len);
-    p = emit_mov64(p, 13, userbuf);
-    uint8_t *login_uloop = p;
-    p = emit_syscall_only(p, 14);
-    *p++ = 0x3C; *p++ = 0x0D;
-    *p++ = 0x74; uint8_t *login_udone = p; *p++ = 0x00;
-    *p++ = 0x3C; *p++ = 0x0A;
-    *p++ = 0x74; uint8_t *login_udone2 = p; *p++ = 0x00;
-    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
-    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7;
-    p = emit_syscall_only(p, 15);
-    *p++ = 0xEB;
-    int8_t login_uloop_off = (int8_t)(login_uloop - p - 1);
-    *p++ = (uint8_t)login_uloop_off;
-    *login_udone = (uint8_t)(p - login_udone - 1);
-    *login_udone2 = (uint8_t)(p - login_udone2 - 1);
-    *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
-    p = emit_print(p, s_nl, s_nl_len);
-    /* Prompt for password */
+    p = emit_mov64(p, 7, userbuf);   /* rdi = buffer */
+    p = emit_mov64(p, 6, 64);        /* rsi = max length */
+    p = emit_syscall_only(p, 70);    /* SYS_READLINE */
+    /* Check for ESC (rax < 0) */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
+    *p++ = 0x0F; *p++ = 0x88; uint8_t *login_esc = p; p += 4; /* JS near → cancel */
+    /* Prompt for password — uses SYS_READLINE_MASKED for '*' echo */
     p = emit_print(p, s_pass, s_pass_len);
-    p = emit_mov64(p, 13, passbuf);
-    uint8_t *login_ploop = p;
-    p = emit_syscall_only(p, 14);
-    *p++ = 0x3C; *p++ = 0x0D;
-    *p++ = 0x74; uint8_t *login_pdone = p; *p++ = 0x00;
-    *p++ = 0x3C; *p++ = 0x0A;
-    *p++ = 0x74; uint8_t *login_pdone2 = p; *p++ = 0x00;
-    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
-    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x2A; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
-    p = emit_syscall_only(p, 15);
-    *p++ = 0xEB;
-    int8_t login_ploop_off = (int8_t)(login_ploop - p - 1);
-    *p++ = (uint8_t)login_ploop_off;
-    *login_pdone = (uint8_t)(p - login_pdone - 1);
-    *login_pdone2 = (uint8_t)(p - login_pdone2 - 1);
-    *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
-    p = emit_print(p, s_nl, s_nl_len);
+    p = emit_mov64(p, 7, passbuf);   /* rdi = buffer */
+    p = emit_mov64(p, 6, 64);        /* rsi = max length */
+    p = emit_syscall_only(p, 71);    /* SYS_READLINE_MASKED */
+    /* Check for ESC (rax < 0) */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
+    *p++ = 0x0F; *p++ = 0x88; uint8_t *login_esc2 = p; p += 4; /* JS near → cancel */
     /* Verify */
     p = emit_mov64(p, 7, userbuf);
     p = emit_mov64(p, 6, passbuf);
@@ -1789,6 +1903,11 @@ void run_tomahawk_shell(void) {
     }
     p = emit_print(p, s_login_fail, s_login_fail_len);
     *p++ = 0xE9; uint8_t *jloop8 = p; p += 4;
+    /* ESC cancel target for login (both username and password ESC land here) */
+    { int32_t _o = (int32_t)(p - login_esc - 4); login_esc[0]=_o&0xFF; login_esc[1]=(_o>>8)&0xFF; login_esc[2]=(_o>>16)&0xFF; login_esc[3]=(_o>>24)&0xFF; }
+    { int32_t _o = (int32_t)(p - login_esc2 - 4); login_esc2[0]=_o&0xFF; login_esc2[1]=(_o>>8)&0xFF; login_esc2[2]=(_o>>16)&0xFF; login_esc2[3]=(_o>>24)&0xFF; }
+    p = emit_print(p, s_cancelled, s_cancelled_len);
+    *p++ = 0xE9; uint8_t *jloop_login_cancel = p; p += 4;
     /* Patch not_login (32-bit offset) */
     {
         int32_t off = (int32_t)(p - not_login - 4);
@@ -1815,51 +1934,27 @@ void run_tomahawk_shell(void) {
     int8_t cmp_reg_off = (int8_t)(cmp_reg - p - 1);
     *p++ = (uint8_t)cmp_reg_off;
     *is_reg = (uint8_t)(p - is_reg - 1);
-    /* Prompt for username */
+    /* Prompt for username — uses SYS_READLINE for full QoL */
     p = emit_print(p, s_user, s_user_len);
-    p = emit_mov64(p, 13, userbuf);
-    uint8_t *reg_uloop = p;
-    p = emit_syscall_only(p, 14);
-    *p++ = 0x3C; *p++ = 0x0D;
-    *p++ = 0x74; uint8_t *reg_udone = p; *p++ = 0x00;
-    *p++ = 0x3C; *p++ = 0x0A;
-    *p++ = 0x74; uint8_t *reg_udone2 = p; *p++ = 0x00;
-    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
-    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7;
-    p = emit_syscall_only(p, 15);
-    *p++ = 0xEB;
-    int8_t reg_uloop_off = (int8_t)(reg_uloop - p - 1);
-    *p++ = (uint8_t)reg_uloop_off;
-    *reg_udone = (uint8_t)(p - reg_udone - 1);
-    *reg_udone2 = (uint8_t)(p - reg_udone2 - 1);
-    *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
-    p = emit_print(p, s_nl, s_nl_len);
+    p = emit_mov64(p, 7, userbuf);   /* rdi = buffer */
+    p = emit_mov64(p, 6, 64);        /* rsi = max length */
+    p = emit_syscall_only(p, 70);    /* SYS_READLINE */
+    /* Check for ESC (rax < 0) */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
+    *p++ = 0x0F; *p++ = 0x88; uint8_t *reg_esc = p; p += 4; /* JS near → cancel */
     /* Check if user exists */
     p = emit_mov64(p, 7, userbuf);
     p = emit_syscall_only(p, 12); /* SYS_PASS_EXISTS */
     *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0;
     *p++ = 0x75; uint8_t *reg_exists = p; *p++ = 0x00;
-    /* Prompt for password */
+    /* Prompt for password — uses SYS_READLINE_MASKED for '*' echo */
     p = emit_print(p, s_pass, s_pass_len);
-    p = emit_mov64(p, 13, passbuf);
-    uint8_t *reg_ploop = p;
-    p = emit_syscall_only(p, 14);
-    *p++ = 0x3C; *p++ = 0x0D;
-    *p++ = 0x74; uint8_t *reg_pdone = p; *p++ = 0x00;
-    *p++ = 0x3C; *p++ = 0x0A;
-    *p++ = 0x74; uint8_t *reg_pdone2 = p; *p++ = 0x00;
-    *p++ = 0x41; *p++ = 0x88; *p++ = 0x45; *p++ = 0x00;
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
-    *p++ = 0x48; *p++ = 0xC7; *p++ = 0xC7; *p++ = 0x2A; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
-    p = emit_syscall_only(p, 15);
-    *p++ = 0xEB;
-    int8_t reg_ploop_off = (int8_t)(reg_ploop - p - 1);
-    *p++ = (uint8_t)reg_ploop_off;
-    *reg_pdone = (uint8_t)(p - reg_pdone - 1);
-    *reg_pdone2 = (uint8_t)(p - reg_pdone2 - 1);
-    *p++ = 0x41; *p++ = 0xC6; *p++ = 0x45; *p++ = 0x00; *p++ = 0x00;
-    p = emit_print(p, s_nl, s_nl_len);
+    p = emit_mov64(p, 7, passbuf);   /* rdi = buffer */
+    p = emit_mov64(p, 6, 64);        /* rsi = max length */
+    p = emit_syscall_only(p, 71);    /* SYS_READLINE_MASKED */
+    /* Check for ESC (rax < 0) */
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
+    *p++ = 0x0F; *p++ = 0x88; uint8_t *reg_esc2 = p; p += 4; /* JS near → cancel */
     /* Store user */
     p = emit_mov64(p, 7, userbuf);
     p = emit_mov64(p, 6, passbuf);
@@ -1869,6 +1964,11 @@ void run_tomahawk_shell(void) {
     *reg_exists = (uint8_t)(p - reg_exists - 1);
     p = emit_print(p, s_reg_exists, s_reg_exists_len);
     *p++ = 0xE9; uint8_t *jloop10 = p; p += 4;
+    /* ESC cancel target for register (both username and password ESC land here) */
+    { int32_t _o = (int32_t)(p - reg_esc - 4); reg_esc[0]=_o&0xFF; reg_esc[1]=(_o>>8)&0xFF; reg_esc[2]=(_o>>16)&0xFF; reg_esc[3]=(_o>>24)&0xFF; }
+    { int32_t _o = (int32_t)(p - reg_esc2 - 4); reg_esc2[0]=_o&0xFF; reg_esc2[1]=(_o>>8)&0xFF; reg_esc2[2]=(_o>>16)&0xFF; reg_esc2[3]=(_o>>24)&0xFF; }
+    p = emit_print(p, s_cancelled, s_cancelled_len);
+    *p++ = 0xE9; uint8_t *jloop_reg_cancel = p; p += 4;
     /* Patch not_reg (32-bit offset) */
     {
         int32_t off = (int32_t)(p - not_reg - 4);
@@ -1967,33 +2067,68 @@ void run_tomahawk_shell(void) {
     /* Continue code in third page */
     p = code3_ptr;
 
-    /* ===== Macro to emit a simple command: compare + syscall + jmp loop ===== */
-    /* Each FAT32 shell command: compare string, call syscall, jump back */
+    /* ===== Macro to emit a simple command: prefix-compare + syscall + jmp loop ===== */
+    /* Each FAT32 shell command: compare cmd prefix, pass cmdbuf as rdi, call syscall, jump back */
+    /* Prefix match: when cmd string byte is NUL, accept if cmdbuf byte is NUL or space */
     #define EMIT_SIMPLE_CMD(cmd_str, syscall_num, jloop_var, not_var) \
     do { \
         p = emit_mov64(p, 12, cmdbuf); \
         p = emit_mov64(p, 13, cmd_str); \
         uint8_t *_cmp = p; \
+        /* mov al, [r12] */ \
         *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24; \
+        /* mov bl, [r13] */ \
         *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00; \
-        *p++ = 0x38; *p++ = 0xD8; \
-        *p++ = 0x0F; *p++ = 0x85; not_var = p; p += 4; \
+        /* test bl, bl  -- cmd string byte NUL? */ \
+        *p++ = 0x84; *p++ = 0xDB; \
+        /* jne compare_chars (short) */ \
+        *p++ = 0x75; uint8_t *_skip = p; *p++ = 0x00; \
+        /* --- cmd string ended: match if cmdbuf is NUL or space --- */ \
+        /* test al, al */ \
         *p++ = 0x84; *p++ = 0xC0; \
-        *p++ = 0x74; uint8_t *_is = p; *p++ = 0x00; \
+        /* je matched (short) */ \
+        *p++ = 0x74; uint8_t *_m1 = p; *p++ = 0x00; \
+        /* cmp al, 0x20 */ \
+        *p++ = 0x3C; *p++ = 0x20; \
+        /* je matched (short) */ \
+        *p++ = 0x74; uint8_t *_m2 = p; *p++ = 0x00; \
+        /* jmp not_match (near, unconditional) */ \
+        *p++ = 0xE9; not_var = p; p += 4; \
+        /* --- compare_chars --- */ \
+        *_skip = (uint8_t)(p - _skip - 1); \
+        /* cmp al, bl */ \
+        *p++ = 0x38; *p++ = 0xD8; \
+        /* jne not_match (near) */ \
+        *p++ = 0x0F; *p++ = 0x85; uint8_t *_n2 = p; p += 4; \
+        /* inc r12 */ \
         *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4; \
+        /* inc r13 */ \
         *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5; \
+        /* jmp _cmp (short) */ \
         *p++ = 0xEB; \
         int8_t _coff = (int8_t)(_cmp - p - 1); \
         *p++ = (uint8_t)_coff; \
-        *_is = (uint8_t)(p - _is - 1); \
+        /* --- matched --- */ \
+        *_m1 = (uint8_t)(p - _m1 - 1); \
+        *_m2 = (uint8_t)(p - _m2 - 1); \
+        /* pass cmdbuf as rdi (arg1) for the syscall */ \
+        p = emit_mov64(p, 7, cmdbuf); \
         p = emit_syscall_only(p, syscall_num); \
         *p++ = 0xE9; jloop_var = p; p += 4; \
+        /* --- patch both not_match near jumps --- */ \
         { \
             int32_t _o = (int32_t)(p - not_var - 4); \
             not_var[0] = _o & 0xFF; \
             not_var[1] = (_o >> 8) & 0xFF; \
             not_var[2] = (_o >> 16) & 0xFF; \
             not_var[3] = (_o >> 24) & 0xFF; \
+        } \
+        { \
+            int32_t _o2 = (int32_t)(p - _n2 - 4); \
+            _n2[0] = _o2 & 0xFF; \
+            _n2[1] = (_o2 >> 8) & 0xFF; \
+            _n2[2] = (_o2 >> 16) & 0xFF; \
+            _n2[3] = (_o2 >> 24) & 0xFF; \
         } \
     } while(0)
 
@@ -2007,6 +2142,7 @@ void run_tomahawk_shell(void) {
     uint8_t *jloop_cd, *not_cd;
     uint8_t *jloop_rename, *not_rename;
     uint8_t *jloop_chmod, *not_chmod;
+    uint8_t *jloop_touch, *not_touch;
 
     EMIT_SIMPLE_CMD(s_cmd_mount,  50, jloop_mount,  not_mount);
     EMIT_SIMPLE_CMD(s_cmd_umount, 51, jloop_umount, not_umount);
@@ -2018,6 +2154,7 @@ void run_tomahawk_shell(void) {
     EMIT_SIMPLE_CMD(s_cmd_cd,     57, jloop_cd,     not_cd);
     EMIT_SIMPLE_CMD(s_cmd_rename, 58, jloop_rename, not_rename);
     EMIT_SIMPLE_CMD(s_cmd_chmod,  59, jloop_chmod,  not_chmod);
+    EMIT_SIMPLE_CMD(s_cmd_touch,  61, jloop_touch,  not_touch);
 
     #undef EMIT_SIMPLE_CMD
     
@@ -2090,6 +2227,8 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP(jloop8);
     PATCH_JLOOP(jloop9);
     PATCH_JLOOP(jloop10);
+    PATCH_JLOOP(jloop_login_cancel);
+    PATCH_JLOOP(jloop_reg_cancel);
     PATCH_JLOOP(jloop_vfs);
     PATCH_JLOOP(jloop_tests);
     
@@ -2116,6 +2255,7 @@ void run_tomahawk_shell(void) {
     PATCH_JLOOP_P3(jloop_cd);
     PATCH_JLOOP_P3(jloop_rename);
     PATCH_JLOOP_P3(jloop_chmod);
+    PATCH_JLOOP_P3(jloop_touch);
     PATCH_JLOOP_P3(jloop_forkwait);
     PATCH_JLOOP_P3(jloop_shellcmd);
     
@@ -2188,6 +2328,12 @@ void run_tomahawk_shell(void) {
     /* Flush keyboard */
     while (hal_inb(0x64) & 0x01) {
         hal_inb(0x60);
+    }
+    
+    /* Set shell process UID to -1 (not logged in) before entering Ring 3 */
+    {
+        pcb_t *_sp = get_current_process();
+        if (_sp) _sp->uid = (uint32_t)-1;
     }
     
     /* Jump to Ring 3 */

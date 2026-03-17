@@ -583,8 +583,8 @@ void net_device_iface_test(void)
         int r3 = net_device_transmit(NULL, NULL);
         IFACE_CHECK(r3 == -1, "net_device_transmit(NULL,NULL) returns -1");
 
-        net_device_t *r4 = net_device_find_by_ip(IPV4(0, 0, 0, 0));
-        IFACE_CHECK(r4 == NULL, "find_by_ip(0.0.0.0) returns NULL");
+        net_device_t *r4 = net_device_find_by_ip(IPV4(192, 168, 255, 255));
+        IFACE_CHECK(r4 == NULL, "find_by_ip(192.168.255.255) returns NULL");
 
         /* print_stats(NULL) must not crash */
         net_device_print_stats(NULL);

@@ -249,20 +249,15 @@ uintptr_t paging_get_current_cr3() {
  *
  * Sets up the kernel's initial PML4 with identity mappings for:
  *   1. Kernel code/data/stack (kernel_start to kernel_end)
- *   2. Early I/O region (0 to 4 MiB)
- *   3. GOP framebuffer (0x80000000, assuming 1024x768 ~3 MiB, map 4 MiB)
+ *   2. Early I/O region (0 to 512 MiB)
+ *   3. GOP framebuffer (address and size from bootloader)
  *
  * Returns physical address of the kernel PML4, or 0 on failure.
- *
- * NOTE: Assumes identity mapping (virt == phys, phys_map_offset == 0).
- * If you change phys_map_offset, kernel page tables must account for that.
  */
 
-#define FRAMEBUFFER_PADDR  0x80000000ULL
-#define FRAMEBUFFER_SIZE   (4 * 1024 * 1024)  /* 4 MiB to be safe */
 #define EARLY_IO_SIZE      (512 * 1024 * 1024)  /* 512 MiB - enough for kernel heap/allocations */
 
-uintptr_t paging_setup_kernel_pml4(void) {
+uintptr_t paging_setup_kernel_pml4(uintptr_t fb_paddr, size_t fb_size) {
     /* Create kernel PML4 */
     uintptr_t pml4 = paging_create_pml4();
     if (!pml4) return 0;
@@ -304,12 +299,15 @@ uintptr_t paging_setup_kernel_pml4(void) {
         return 0;
     }
 
-    /* Identity-map GOP framebuffer (0x80000000 for ~4 MiB) */
-    size_t n_fb_pages = (FRAMEBUFFER_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
-    if (paging_map_range(pml4, FRAMEBUFFER_PADDR, FRAMEBUFFER_PADDR,
-                         n_fb_pages, PTE_PRESENT | PTE_RW | PTE_GLOBAL)) {
-        uart_puts("paging: map fb failed\n");
-        return 0;
+    /* Identity-map GOP framebuffer (dynamic address and size from bootloader) */
+    if (fb_paddr != 0 && fb_size != 0) {
+        /* Round up to page boundary */
+        size_t n_fb_pages = (fb_size + PAGE_SIZE - 1) / PAGE_SIZE;
+        if (paging_map_range(pml4, fb_paddr, fb_paddr,
+                             n_fb_pages, PTE_PRESENT | PTE_RW | PTE_GLOBAL)) {
+            uart_puts("paging: map fb failed\n");
+            return 0;
+        }
     }
 
     uart_puts("paging: kernel pml4 ready\n");

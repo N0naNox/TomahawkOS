@@ -47,6 +47,7 @@ void tty_init(void) {
     /* Flags */
     t->echo        = 1;
     t->serial_echo = 0;
+    t->echo_mask   = 0;
 }
 
 tty_t *tty_console(void) {
@@ -94,7 +95,8 @@ void tty_redraw_line(tty_t *tty, int from) {
         int col = screen_pos % VGA_WIDTH;
         if (row >= VGA_HEIGHT) break;
         if (i < tty->line_len) {
-            vga_draw_char_at(row, col, tty->line_buf[i]);
+            char dc = (tty->echo_mask) ? tty->echo_mask : tty->line_buf[i];
+            vga_draw_char_at(row, col, dc);
         } else {
             vga_clear_char(row, col);  /* erase trailing ghost char */
         }
@@ -171,6 +173,18 @@ static const char sc_to_ascii[128] = {
     /* 0x40 – 0x7F all 0 */
 };
 
+/* Shifted scancode table */
+static const char sc_to_ascii_shift[128] = {
+    /*0x00*/ 0,   27,  '!', '@', '#', '$', '%', '^',
+    /*0x08*/ '&', '*', '(', ')', '_', '+', '\b','\t',
+    /*0x10*/ 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I',
+    /*0x18*/ 'O', 'P', '{', '}', '\n', 0,  'A', 'S',
+    /*0x20*/ 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
+    /*0x28*/ '"', '~',  0, '|', 'Z', 'X', 'C', 'V',
+    /*0x30*/ 'B', 'N', 'M', '<', '>', '?',  0,  '*',
+    /*0x38*/  0,  ' ',  0,   0,   0,   0,   0,   0,
+};
+
 /* ================================================================
  *  tty_readline — the heart of the line discipline
  * ================================================================ */
@@ -185,6 +199,10 @@ int tty_readline(tty_t *tty, char *buf, int maxlen) {
     tty->e0_prefix   = 0;
     tty->hist_browse = -1;
     tty->saved_len   = 0;
+
+    /* Modifier state (local to this call) */
+    int shift_held = 0;
+    int caps_lock  = 0;
 
     /* Record where the editable area starts on screen */
     vga_get_cursor(&tty->start_row, &tty->start_col);
@@ -205,6 +223,14 @@ int tty_readline(tty_t *tty, char *buf, int maxlen) {
             tty->e0_prefix = 1;
             continue;
         }
+
+        /* ---- Modifier tracking ---- */
+        /* Shift press */
+        if (sc == 0x2A || sc == 0x36) { shift_held = 1; continue; }
+        /* Shift release */
+        if (sc == 0xAA || sc == 0xB6) { shift_held = 0; continue; }
+        /* CapsLock press — toggle */
+        if (sc == 0x3A) { caps_lock = !caps_lock; continue; }
 
         /* Ignore break (key-release) codes */
         if (sc & 0x80) {
@@ -333,8 +359,24 @@ int tty_readline(tty_t *tty, char *buf, int maxlen) {
 
         /* ========== Normal (non-extended) keys ========== */
         char ch = 0;
-        if (sc < sizeof(sc_to_ascii)) ch = sc_to_ascii[sc];
+        if (sc < sizeof(sc_to_ascii)) {
+            /* Determine if shifted: for alpha keys, CapsLock inverts shift.
+               For everything else, only Shift matters. */
+            int use_shift = shift_held;
+            char lower = sc_to_ascii[sc];
+            if (caps_lock && lower >= 'a' && lower <= 'z')
+                use_shift = !use_shift;
+            ch = use_shift ? sc_to_ascii_shift[sc] : sc_to_ascii[sc];
+        }
         if (!ch) continue;
+
+        /* ---- ESC — cancel input ---- */
+        if (ch == 27) {
+            vga_erase_cursor();
+            vga_putc('\n');
+            buf[0] = '\0';
+            return -1;
+        }
 
         /* ---- Enter / Return ---- */
         if (ch == '\n' || ch == '\r') {
@@ -377,9 +419,6 @@ int tty_readline(tty_t *tty, char *buf, int maxlen) {
         /* ---- Tab — ignore for now ---- */
         if (ch == '\t') continue;
 
-        /* ---- ESC — ignore ---- */
-        if (ch == 27) continue;
-
         /* ---- Printable character — insert at cursor ---- */
         if (ch >= 32 && ch < 127 && tty->line_len < maxlen - 1) {
             vga_erase_cursor();
@@ -399,4 +438,11 @@ int tty_readline(tty_t *tty, char *buf, int maxlen) {
         }
     }
     /* not reached */
+}
+
+int tty_readline_masked(tty_t *tty, char *buf, int maxlen, char mask_char) {
+    tty->echo_mask = mask_char;
+    int r = tty_readline(tty, buf, maxlen);
+    tty->echo_mask = 0;
+    return r;
 }

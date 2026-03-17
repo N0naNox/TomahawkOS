@@ -65,8 +65,11 @@
 /* WAITPID */
 #define SYS_WAITPID 60
 
+#define SYS_FAT32_TOUCH 61
+
 /* Line editing with cursor support */
-#define SYS_READLINE 70
+#define SYS_READLINE        70
+#define SYS_READLINE_MASKED 71
 
 /* Socket syscalls (BSD-style) */
 #define SYS_SOCKET      80   /* socket(domain, type, protocol) -> fd   */
