@@ -19,6 +19,8 @@
 #include "uart.h"
 #include "include/socket.h"
 #include "include/fd.h"
+#include "include/uaccess.h"
+#include "include/pipe.h"
 
 /* External saved context from usermode demo */
 extern volatile uint64_t usermode_demo_return_rsp;
@@ -177,22 +179,32 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_EXEC:
             /* arg1 = path, arg2 = argv */
+            if (validate_user_string((const char *)arg1))
+                return (uint64_t)(int64_t)-EFAULT;
             return sys_exec((const char*)arg1, (char* const*)arg2);
 
         case SYS_WAIT:
             /* arg1 = status pointer */
+            if (arg1 && validate_user_buf((void *)arg1, sizeof(int)))
+                return (uint64_t)(int64_t)-EFAULT;
             return sys_wait((int*)arg1);
 
         case SYS_WAITPID:
             /* arg1 = pid, arg2 = status, arg3 = options */
+            if (arg2 && validate_user_buf((void *)arg2, sizeof(int)))
+                return (uint64_t)(int64_t)-EFAULT;
             return sys_waitpid((int)arg1, (int*)arg2, (int)arg3);
 
         case SYS_PASS_VERIFY:
             /* arg1 = username, arg2 = password */
+            if (validate_user_string((const char *)arg1) || validate_user_string((const char *)arg2))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)password_store_verify((const char*)arg1, (const char*)arg2);
 
         case SYS_PASS_STORE:
             /* arg1 = username, arg2 = password */
+            if (validate_user_string((const char *)arg1) || validate_user_string((const char *)arg2))
+                return (uint64_t)(int64_t)-EFAULT;
             {
                 int rc = password_store_add((const char*)arg1, (const char*)arg2);
                 if (rc == 0) {
@@ -204,11 +216,15 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_PASS_EXISTS:
             /* arg1 = username */
+            if (validate_user_string((const char *)arg1))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)password_store_user_exists((const char*)arg1);
 
         case SYS_WRITE:
             /* arg1 = string pointer, arg2 = length */
             if (arg1 && arg2) {
+                if (validate_user_buf((const void *)arg1, arg2))
+                    return (uint64_t)(int64_t)-EFAULT;
                 tty_write_n(tty_console(), (const char *)arg1, (size_t)arg2);
             }
             return 0;
@@ -287,6 +303,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_GET_USERNAME:
             /* arg1 = buffer, arg2 = buffer size */
+            if (validate_user_buf((void *)arg1, arg2))
+                return (uint64_t)(int64_t)-EFAULT;
             if (shell_current_uid < 0) {
                 /* Not logged in - return "guest" */
                 const char* guest = "guest";
@@ -340,6 +358,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_PASS_GET_UID:
             /* arg1 = username, returns UID or -1 if not found */
+            if (validate_user_string((const char *)arg1))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)password_store_get_uid((const char*)arg1);
 
         case SYS_RUN_VFS_DEMO:
@@ -363,6 +383,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
         case SYS_SHELL_CMD:
             /* arg1 = pointer to command line string in userspace */
             if (arg1) {
+                if (validate_user_string((const char *)arg1))
+                    return (uint64_t)(int64_t)-EFAULT;
                 int ret = shell_fs_dispatch((const char *)arg1);
                 return (uint64_t)ret;
             }
@@ -394,6 +416,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             /* arg1 = parent directory path (const char *)
                arg2 = name to remove (const char *) */
             if (arg1 && arg2) {
+                if (validate_user_string((const char *)arg1) || validate_user_string((const char *)arg2))
+                    return (uint64_t)(int64_t)-EFAULT;
                 struct vnode *parent = NULL;
                 if (vfs_resolve_path((const char *)arg1, &parent) != 0 || !parent)
                     return (uint64_t)(int64_t)-ENOENT;
@@ -406,6 +430,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                arg2 = new full path (const char *)
                Splits each path into parent dir + basename. */
             if (arg1 && arg2) {
+                if (validate_user_string((const char *)arg1) || validate_user_string((const char *)arg2))
+                    return (uint64_t)(int64_t)-EFAULT;
                 const char *old_path = (const char *)arg1;
                 const char *new_path = (const char *)arg2;
 
@@ -452,6 +478,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
         case SYS_CHMOD:
             /* arg1 = path (const char *), arg2 = mode (uint16_t) */
             if (arg1) {
+                if (validate_user_string((const char *)arg1))
+                    return (uint64_t)(int64_t)-EFAULT;
                 struct vnode *vp = NULL;
                 if (vfs_resolve_path((const char *)arg1, &vp) != 0 || !vp)
                     return (uint64_t)(int64_t)-ENOENT;
@@ -467,52 +495,63 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         case SYS_FAT32_MOUNT:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             uart_puts("[SYSCALL] SYS_FAT32_MOUNT (50) reached\n");
             shell_fat32_mount((const char *)arg1);
             return 0;
 
         case SYS_FAT32_UMOUNT:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             shell_fat32_umount((const char *)arg1);
             return 0;
 
         case SYS_FAT32_LS:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             shell_fat32_ls((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CAT:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             shell_fat32_cat((const char *)arg1);
             return 0;
 
         case SYS_FAT32_WRITE:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_write((const char *)arg1);
             return 0;
 
         case SYS_FAT32_MKDIR:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_mkdir((const char *)arg1);
             return 0;
 
         case SYS_FAT32_RM:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_rm((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CD:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             shell_fat32_cd((const char *)arg1);
             return 0;
 
         case SYS_FAT32_RENAME:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_rename((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CHMOD:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_chmod((const char *)arg1);
             return 0;
 
         case SYS_FAT32_TOUCH:
+            if (validate_user_string((const char *)arg1)) return (uint64_t)(int64_t)-EFAULT;
             if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_touch((const char *)arg1);
             return 0;
@@ -544,11 +583,15 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
         case SYS_READLINE:
             /* Line editing with cursor, arrows, history — delegated to TTY */
             /* arg1 = buffer pointer,  arg2 = max length (including NUL) */
+            if (validate_user_buf((void *)arg1, arg2))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)tty_readline(tty_console(), (char *)arg1, (int)arg2);
 
         case SYS_READLINE_MASKED:
             /* Same as SYS_READLINE but echoes '*' instead of actual chars */
             /* arg1 = buffer pointer,  arg2 = max length (including NUL) */
+            if (validate_user_buf((void *)arg1, arg2))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)tty_readline_masked(tty_console(), (char *)arg1, (int)arg2, '*');
 
         /* ===== Socket syscalls ===== */
@@ -567,6 +610,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
              * arg2 = pointer to sockaddr_in_t
              * returns: 0 on success, negative SOCK_ERR_* on failure */
             if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            if (validate_user_buf((const void *)arg2, sizeof(sockaddr_in_t)))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)(int64_t)sock_bind((int)arg1, (const sockaddr_in_t *)arg2);
 
         case SYS_SENDTO:
@@ -575,6 +620,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
              * arg2 = pointer to socket_io_args_t { buf, len, addr (destination) }
              * returns: bytes sent on success, negative SOCK_ERR_* on failure */
             if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            if (validate_user_buf((const void *)arg2, sizeof(socket_io_args_t)))
+                return (uint64_t)(int64_t)-EFAULT;
             {
                 socket_io_args_t *io = (socket_io_args_t *)arg2;
                 return (uint64_t)(int64_t)sock_sendto((int)arg1, io->buf, io->len, &io->addr);
@@ -586,6 +633,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
              * arg2 = pointer to socket_io_args_t { buf, len (capacity), addr (filled on return) }
              * returns: bytes received on success, negative SOCK_ERR_* on failure */
             if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            if (validate_user_buf((void *)arg2, sizeof(socket_io_args_t)))
+                return (uint64_t)(int64_t)-EFAULT;
             {
                 socket_io_args_t *io = (socket_io_args_t *)arg2;
                 return (uint64_t)(int64_t)sock_recvfrom((int)arg1, io->buf, io->len, &io->addr);
@@ -597,6 +646,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
              * arg2 = pointer to sockaddr_in_t (remote address)
              * returns: 0 on success, negative SOCK_ERR_* on failure */
             if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            if (validate_user_buf((const void *)arg2, sizeof(sockaddr_in_t)))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)(int64_t)sock_connect((int)arg1, (const sockaddr_in_t *)arg2);
 
         case SYS_SEND:
@@ -606,6 +657,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
              * arg3 = payload length
              * returns: bytes sent on success, negative SOCK_ERR_* on failure */
             if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            if (validate_user_buf((const void *)arg2, arg3))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)(int64_t)sock_send((int)arg1, (const void *)arg2, (uint16_t)arg3);
 
         case SYS_RECV:
@@ -615,6 +668,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
              * arg3 = maximum bytes to receive
              * returns: bytes received on success, negative SOCK_ERR_* on failure */
             if (!arg2) return (uint64_t)(int64_t)SOCK_ERR_INVAL;
+            if (validate_user_buf((void *)arg2, arg3))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)(int64_t)sock_recv((int)arg1, (void *)arg2, (uint16_t)arg3);
 
         case SYS_SOCK_CLOSE:
@@ -630,6 +685,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
         case SYS_PASS_CHANGE:
             /* arg1 = old_password, arg2 = new_password; acts on current logged-in user */
             if (shell_current_uid < 0) return (uint64_t)(int64_t)-EPERM;
+            if (validate_user_string((const char *)arg1) || validate_user_string((const char *)arg2))
+                return (uint64_t)(int64_t)-EFAULT;
             return (uint64_t)password_store_change_password(
                 shell_current_uid, (const char*)arg1, (const char*)arg2);
 
@@ -639,6 +696,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                 uart_puts("[KERNEL] userdel: permission denied\n");
                 return (uint64_t)(int64_t)-EPERM;
             }
+            if (validate_user_string((const char *)arg1))
+                return (uint64_t)(int64_t)-EFAULT;
             const char *del_name = skip_to_arg1((const char*)arg1);
             if (!del_name) return (uint64_t)(int64_t)-EINVAL;
             int del_uid = password_store_get_uid(del_name);
@@ -652,6 +711,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                 vga_write("[ERROR] Permission denied: admin only.\n");
                 return (uint64_t)(int64_t)-EPERM;
             }
+            if (validate_user_string((const char *)arg1))
+                return (uint64_t)(int64_t)-EFAULT;
             const char *pname = skip_to_arg1((const char*)arg1);
             if (!pname) { vga_write("[ERROR] Usage: promote <username>\n"); return (uint64_t)(int64_t)-EINVAL; }
             int puid = password_store_get_uid(pname);
@@ -668,6 +729,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                 vga_write("[ERROR] Permission denied: admin only.\n");
                 return (uint64_t)(int64_t)-EPERM;
             }
+            if (validate_user_string((const char *)arg1))
+                return (uint64_t)(int64_t)-EFAULT;
             const char *dname = skip_to_arg1((const char*)arg1);
             if (!dname) { vga_write("[ERROR] Usage: demote <username>\n"); return (uint64_t)(int64_t)-EINVAL; }
             int duid = password_store_get_uid(dname);
@@ -685,6 +748,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             const char *path = (const char *)arg1;
             uint16_t flags = (uint16_t)arg2;
             if (!path) return (uint64_t)(int64_t)-EINVAL;
+            if (validate_user_string(path))
+                return (uint64_t)(int64_t)-EFAULT;
 
             struct vnode *vp = NULL;
             int r = vfs_resolve_path(path, &vp);
@@ -715,6 +780,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             if (!f) return (uint64_t)(int64_t)-EBADF;
             if ((f->f_flags & O_ACCMODE) == O_WRONLY) return (uint64_t)(int64_t)-EBADF;
             if (!f->f_vnode) return (uint64_t)(int64_t)-EBADF;
+            if (validate_user_buf((void *)arg2, arg3))
+                return (uint64_t)(int64_t)-EFAULT;
 
             if (f->f_vnode->v_op && f->f_vnode->v_op->vop_read_at) {
                 int n = f->f_vnode->v_op->vop_read_at(f->f_vnode, (void *)arg2, (size_t)arg3, f->f_offset);
@@ -737,6 +804,8 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             if (!f) return (uint64_t)(int64_t)-EBADF;
             if ((f->f_flags & O_ACCMODE) == O_RDONLY) return (uint64_t)(int64_t)-EBADF;
             if (!f->f_vnode) return (uint64_t)(int64_t)-EBADF;
+            if (validate_user_buf((const void *)arg2, arg3))
+                return (uint64_t)(int64_t)-EFAULT;
 
             if (f->f_vnode->v_op && f->f_vnode->v_op->vop_write_at) {
                 int n = f->f_vnode->v_op->vop_write_at(f->f_vnode, (const void *)arg2, (size_t)arg3, f->f_offset);
@@ -761,6 +830,15 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             pcb_t *cur = get_current_process();
             if (!cur) return (uint64_t)(int64_t)-ESRCH;
             return (uint64_t)(int64_t)fd_dup(cur, (int)arg1);
+        }
+
+        case SYS_PIPE: {
+            /* arg1 = pointer to int[2] in user space */
+            if (validate_user_buf((void *)arg1, 2 * sizeof(int)))
+                return (uint64_t)(int64_t)-EFAULT;
+            pcb_t *cur = get_current_process();
+            if (!cur) return (uint64_t)(int64_t)-ESRCH;
+            return (uint64_t)(int64_t)pipe_create(cur, (int *)arg1);
         }
 
         default:

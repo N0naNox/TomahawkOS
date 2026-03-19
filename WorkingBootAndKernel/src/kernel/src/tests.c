@@ -15,6 +15,8 @@
 #include "include/errno.h"
 #include "include/fd.h"
 #include "include/file.h"
+#include "include/uaccess.h"
+#include "include/pipe.h"
 #include <uart.h>
 
 /* PTE flags from paging.h */
@@ -573,6 +575,99 @@ void test_fd_dup(void) {
     TEST_ASSERT(bad == -EBADF, "dup(999) returns -EBADF");
 }
 
+/* ========== User Pointer Validation Tests ========== */
+
+void test_uaccess(void) {
+    uart_puts("\n=== Testing User Pointer Validation ===\n");
+
+    /* NULL should fail */
+    TEST_ASSERT(validate_user_buf(NULL, 10) != 0, "validate_user_buf(NULL) fails");
+    TEST_ASSERT(validate_user_string(NULL) != 0, "validate_user_string(NULL) fails");
+
+    /* Kernel addresses should fail (>= 0xFFFFFFFF80000000) */
+    TEST_ASSERT(validate_user_buf((void*)0xFFFFFFFF80000000ULL, 1) != 0,
+                "kernel addr 0xFFFFFFFF80000000 rejected");
+    TEST_ASSERT(validate_user_buf((void*)0xFFFFFFFFFFFF0000ULL, 1) != 0,
+                "kernel addr 0xFFFFFFFFFFFF0000 rejected");
+    TEST_ASSERT(validate_user_string((const char*)0xFFFFFFFF80000001ULL) != 0,
+                "kernel string addr rejected");
+
+    /* Low user-space addresses should pass */
+    TEST_ASSERT(validate_user_buf((void*)0x400000ULL, 4096) == 0,
+                "user addr 0x400000 accepted");
+    TEST_ASSERT(validate_user_string((const char*)0x400000ULL) == 0,
+                "user string 0x400000 accepted");
+
+    /* Zero-length buffer with valid addr should pass */
+    TEST_ASSERT(validate_user_buf((void*)0x1000, 0) == 0,
+                "zero-length buf accepted");
+
+    /* Wraparound should fail */
+    TEST_ASSERT(validate_user_buf((void*)0x7FFFFFFFFFFFF000ULL, 0x2000) != 0,
+                "wraparound buf rejected");
+}
+
+/* ========== Pipe Tests ========== */
+
+void test_pipe_create(void) {
+    uart_puts("\n=== Testing Pipe Create ===\n");
+
+    pcb_t *proc = get_current_process();
+    if (!proc) { uart_puts("[TEST SKIP] No current process for pipe test\n"); return; }
+
+    int fds[2] = {-1, -1};
+    int rc = pipe_create(proc, fds);
+    TEST_ASSERT(rc == 0, "pipe_create returns 0");
+    TEST_ASSERT(fds[0] >= 0, "pipe read fd >= 0");
+    TEST_ASSERT(fds[1] >= 0, "pipe write fd >= 0");
+    TEST_ASSERT(fds[0] != fds[1], "read and write fds differ");
+
+    /* Verify descriptors are open */
+    struct file *rf = fd_get(proc, fds[0]);
+    struct file *wf = fd_get(proc, fds[1]);
+    TEST_ASSERT(rf != NULL, "read end file exists");
+    TEST_ASSERT(wf != NULL, "write end file exists");
+
+    /* Check access modes */
+    TEST_ASSERT((rf->f_flags & O_ACCMODE) == O_RDONLY, "read end is O_RDONLY");
+    TEST_ASSERT((wf->f_flags & O_ACCMODE) == O_WRONLY, "write end is O_WRONLY");
+
+    /* Clean up */
+    fd_close(proc, fds[0]);
+    fd_close(proc, fds[1]);
+}
+
+/* ========== fd_close_all Tests ========== */
+
+void test_fd_close_all(void) {
+    uart_puts("\n=== Testing fd_close_all ===\n");
+
+    pcb_t *proc = get_current_process();
+    if (!proc) { uart_puts("[TEST SKIP] No current process for fd_close_all test\n"); return; }
+
+    /* Open a few fds (beyond the stdio 0,1,2) */
+    int pipe_fds[2];
+    int rc = pipe_create(proc, pipe_fds);
+    TEST_ASSERT(rc == 0, "pipe for close_all test created");
+
+    /* Verify they're open */
+    TEST_ASSERT(fd_get(proc, pipe_fds[0]) != NULL, "pipe rd open before close_all");
+    TEST_ASSERT(fd_get(proc, pipe_fds[1]) != NULL, "pipe wr open before close_all");
+
+    /* Close all */
+    fd_close_all(proc);
+
+    /* Verify everything is closed */
+    TEST_ASSERT(fd_get(proc, 0) == NULL, "fd 0 closed");
+    TEST_ASSERT(fd_get(proc, 1) == NULL, "fd 1 closed");
+    TEST_ASSERT(fd_get(proc, 2) == NULL, "fd 2 closed");
+    TEST_ASSERT(fd_get(proc, pipe_fds[0]) == NULL, "pipe rd closed");
+    TEST_ASSERT(fd_get(proc, pipe_fds[1]) == NULL, "pipe wr closed");
+
+    /* Re-open stdio for remaining tests */
+    fd_init_stdio(proc);
+}
+
 /* ========== Main Test Runner ========== */
 
 void run_kernel_tests(void) {
@@ -606,6 +701,11 @@ void run_kernel_tests(void) {
     test_errno_constants();
     test_fd_alloc_and_close();
     test_fd_dup();
+
+    /* User pointer validation, pipes, and resource cleanup */
+    test_uaccess();
+    test_pipe_create();
+    test_fd_close_all();
 
     /* Summary */
     uart_puts("\n");

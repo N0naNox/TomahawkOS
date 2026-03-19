@@ -32,6 +32,7 @@
 #include "include/password_store.h"
 #include "include/mount.h"
 #include "include/init_config.h"
+#include "include/sys_proc.h"
 #include "include/tty.h"
 #include "include/net.h"
 #include "include/net_test.h"
@@ -45,6 +46,7 @@ static void demo_thread_b(void);
 void demo_esc_watcher(void);
 static void menu_thread(void);
 static void idle_thread(void);
+static void init_thread(void);
 static void keyboard_flush(void);
 
 typedef enum {
@@ -355,8 +357,8 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 	scheduler_init();
 
 	/* Create essential threads */
-	create_process("idle", idle_thread);
-	create_process("menu", menu_thread);
+	create_process("init", init_thread);    /* PID 1 — applies config, spawns menu */
+	create_process("idle", idle_thread);    /* PID 2 — halts when nothing to run */
 
 	/* Enable interrupts and let the scheduler take over */
 	__asm__ volatile("sti");
@@ -435,6 +437,38 @@ void demo_esc_watcher(void) {
 		__asm__ volatile("pause");
 	}
 	scheduler_thread_exit();
+}
+
+/**
+ * PID 1 — init process.
+ * Applies boot-time configuration, spawns the interactive shell (menu),
+ * and then loops reaping any orphaned zombie children.
+ */
+static void init_thread(void) {
+	/* Apply hostname from /etc/init.conf */
+	const char *hostname = init_config_get("hostname");
+	if (hostname) {
+		uart_puts("[INIT] hostname = ");
+		uart_puts(hostname);
+		uart_puts("\n");
+	}
+
+	/* Apply loglevel */
+	const char *loglevel = init_config_get("loglevel");
+	if (loglevel) {
+		uart_puts("[INIT] loglevel = ");
+		uart_puts(loglevel);
+		uart_puts("\n");
+	}
+
+	/* Spawn the interactive menu/shell */
+	create_process("menu", menu_thread);
+
+	/* Reap orphaned zombie children forever (init must not exit) */
+	for (;;) {
+		sys_wait(NULL);
+		__asm__ volatile("hlt");
+	}
 }
 
 static void idle_thread(void) {

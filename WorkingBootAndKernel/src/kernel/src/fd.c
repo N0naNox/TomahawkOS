@@ -96,6 +96,15 @@ void fd_clone(struct pcb *parent, struct pcb *child) {
     }
 }
 
+void fd_close_all(struct pcb *proc) {
+    if (!proc) return;
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (proc->fd_table[i]) {
+            fd_close(proc, i);
+        }
+    }
+}
+
 /* ---------- TTY device vnode (console) ---------- */
 
 static int tty_vop_write(struct vnode *vp, void *buf, size_t len) {

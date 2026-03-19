@@ -96,3 +96,4 @@
 #define SYS_CLOSE  102  /* close(fd)          → 0 or -errno       */
 #define SYS_WRITE_FD 103 /* write(fd, buf, len) → bytes or -errno */
 #define SYS_DUP    104  /* dup(fd)            → new_fd or -errno  */
+#define SYS_PIPE   105  /* pipe(fds[2])       → 0 or -errno       */

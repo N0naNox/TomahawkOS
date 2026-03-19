@@ -96,7 +96,8 @@ C_SOURCES  :=              \
 	${SRC_DIR}/dns.c \
 	${SRC_DIR}/http.c \
 	${SRC_DIR}/panic.c \
-	${SRC_DIR}/fd.c
+	${SRC_DIR}/fd.c \
+	${SRC_DIR}/pipe.c
 
 AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
 NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})

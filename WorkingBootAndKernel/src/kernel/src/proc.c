@@ -10,6 +10,8 @@
 #include "include/frame_alloc.h"
 #include "include/fd.h"
 #include <uart.h>
+#include "include/errno.h"
+#include "include/vnode.h"
 
 /* Kernel stack size per thread */
 #define KERNEL_STACK_SIZE (16 * 1024)
@@ -246,45 +248,123 @@ pcb_t* find_process_by_pid(uint64_t pid) {
     return NULL;
 }
 
+/* PATH search directories for bare executable names */
+static const char *exec_search_dirs[] = {
+    "/bin/", "/sbin/", "/usr/bin/", NULL
+};
+
+/* Resolve an executable path: absolute paths used directly,
+ * bare names searched in PATH directories.
+ * Returns 0 on success with *result set, or negative errno. */
+static int resolve_exec_path(const char *path, struct vnode **result) {
+    *result = NULL;
+
+    if (path[0] == '/') {
+        return vfs_resolve_path(path, result);
+    }
+
+    /* Bare name — try each PATH directory */
+    char fullpath[256];
+    for (int i = 0; exec_search_dirs[i]; i++) {
+        int pos = 0;
+        const char *d = exec_search_dirs[i];
+        while (*d && pos < 250) fullpath[pos++] = *d++;
+        const char *p = path;
+        while (*p && pos < 255) fullpath[pos++] = *p++;
+        fullpath[pos] = '\0';
+
+        if (vfs_resolve_path(fullpath, result) == 0 && *result)
+            return 0;
+    }
+    return -ENOENT;
+}
+
+/* Static buffer for reading ELF files during exec (128 KiB) */
+static char exec_elf_buf[128 * 1024];
+
+#define USER_STACK_TOP   0x800000000000ULL   /* just below 128 TiB */
+#define USER_STACK_PAGES 16                  /* 64 KiB stack */
+
 /* Replace current process image with new executable from file */
 int exec_process(const char* path, char* const argv[]) {
     uart_puts("exec: loading ");
     uart_puts(path);
     uart_puts("\n");
-    
+
     pcb_t* proc = get_current_process();
-    if (!proc) {
-        uart_puts("exec: no current process\n");
-        return -1;
+    if (!proc) return -ESRCH;
+    if (!path) return -EINVAL;
+
+    /* Resolve path (supports bare names via PATH search) */
+    struct vnode *vp = NULL;
+    int rc = resolve_exec_path(path, &vp);
+    if (rc != 0 || !vp) {
+        uart_puts("exec: not found: ");
+        uart_puts(path);
+        uart_puts("\n");
+        return -ENOENT;
     }
-    
-    /* TODO: Open file from VFS - for now, return error if path is NULL */
-    if (!path) {
-        uart_puts("exec: NULL path\n");
-        return -1;
+
+    /* Determine file size */
+    int64_t fsize = -1;
+    if (vp->v_op && vp->v_op->vop_getsize)
+        fsize = vp->v_op->vop_getsize(vp);
+    if (fsize <= 0 || fsize > (int64_t)sizeof(exec_elf_buf)) {
+        /* Fall back: try reading max buffer size */
+        fsize = (int64_t)sizeof(exec_elf_buf);
     }
-    
-    /* For now, we'll assume the executable data is already in memory
-     * In a full implementation, you would:
-     * 1. Open the file using VFS
-     * 2. Read the entire ELF into a buffer
-     * 3. Load it using elf_load_executable_mm
-     * 4. Free the buffer
-     */
-    
-    /* Placeholder: In real implementation, load from VFS */
-    uart_puts("exec: file loading not fully implemented - needs VFS integration\n");
-    (void)argv;  /* Suppress unused warning */
-    
-    /* The actual exec would:
-     * 1. Destroy current address space
-     * 2. Create new address space
-     * 3. Load ELF file
-     * 4. Set up user stack with argc/argv
-     * 5. Jump to entry point
-     */
-    
-    return -1;  /* Not implemented yet */
+
+    /* Read the ELF into kernel buffer */
+    int nbytes = vfs_read_at(vp, exec_elf_buf, (size_t)fsize, 0);
+    if (nbytes <= 0) {
+        uart_puts("exec: read failed\n");
+        return -EIO;
+    }
+
+    /* Destroy old address space, create fresh one */
+    if (proc->mm) mm_destroy(proc->mm);
+    proc->mm = mm_create();
+    if (!proc->mm) return -ENOMEM;
+
+    /* Load ELF segments into new address space */
+    uintptr_t entry = 0;
+    rc = elf_load_executable(exec_elf_buf, proc->mm->pml4_phys, &entry);
+    if (rc != 0) {
+        uart_puts("exec: ELF load error\n");
+        return -EINVAL;
+    }
+
+    /* Allocate user stack */
+    uintptr_t stack_base = USER_STACK_TOP - (USER_STACK_PAGES * PAGE_SIZE);
+    for (int i = 0; i < USER_STACK_PAGES; i++) {
+        uintptr_t frame = pfa_alloc_frame();
+        if (!frame) return -ENOMEM;
+        paging_map_page(proc->mm->pml4_phys, stack_base + i * PAGE_SIZE,
+                        frame, PTE_PRESENT | PTE_RW | PTE_USER);
+    }
+    mm_add_vma(proc->mm, stack_base, USER_STACK_TOP, VM_READ | VM_WRITE);
+
+    /* Update thread entry point */
+    tcb_t *thr = proc->main_thread;
+    if (thr) {
+        thr->context.rip = entry;
+        thr->context.rsp = USER_STACK_TOP - 8;
+        thr->context.rbp = 0;
+    }
+
+    /* Close non-stdio fds (close-on-exec) */
+    for (int i = 3; i < MAX_FILES; i++) {
+        if (proc->fd_table[i]) fd_close(proc, i);
+    }
+
+    /* Reset signal dispositions */
+    signal_init(&proc->signals);
+
+    (void)argv;
+    uart_puts("exec: loaded at entry 0x");
+    uart_putu(entry);
+    uart_puts("\n");
+    return 0;
 }
 
 /* Wait for child process to exit */
@@ -312,6 +392,9 @@ void process_reap(pcb_t* child) {
     uart_puts("[REAP] Freeing resources for PID ");
     uart_putu(child->pid);
     uart_puts("\n");
+
+    /* Close all open file descriptors. */
+    fd_close_all(child);
 
     /* Free the address-space descriptor (mm_destroy is a no-op for pages
      * in your bump allocator, but it marks the intent and will work once

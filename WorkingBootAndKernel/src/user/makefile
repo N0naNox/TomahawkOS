@@ -14,7 +14,9 @@ BUILD_DIR := build
 
 C_SOURCES := \
 	$(SRC_DIR)/syscall.c \
+	$(SRC_DIR)/string.c \
 	$(SRC_DIR)/socket.c \
+	$(SRC_DIR)/stdio.c \
 	$(SRC_DIR)/user_main.c
 
 OBJECTS := $(C_SOURCES:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)

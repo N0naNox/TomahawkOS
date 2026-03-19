@@ -30,6 +30,9 @@ void fd_clone(struct pcb *parent, struct pcb *child);
  * Sets refcount = 1.  Returns pointer or NULL on ENOMEM. */
 struct file *file_alloc(struct vnode *vp, uint16_t flags);
 
+/* Close all open fds for proc (called on exit/reap). */
+void fd_close_all(struct pcb *proc);
+
 /* Open fd 0/1/2 on the console TTY for proc. */
 void fd_init_stdio(struct pcb *proc);
 
