@@ -785,6 +785,9 @@ void net_tx_path_test(void)
         TX_CHECK(nb != NULL, "netbuf_alloc() succeeded");
 
         if (nb) {
+            /* Disable interrupts so the timer can't flush the ring
+             * between enqueue and our pending-count check. */
+            __asm__ volatile("cli");
             int ret = net_tx_enqueue(lo, nb);
             TX_CHECK(ret == 0, "net_tx_enqueue() returned 0 (success)");
 
@@ -794,17 +797,16 @@ void net_tx_path_test(void)
             uart_puts("[tx_test] --- Test 3: pending() == 1 after enqueue ---\n");
             int pending = net_tx_pending();
             TX_CHECK(pending == 1, "net_tx_pending() == 1 after enqueue");
-        }
-    }
-    uart_puts("\n");
 
-    /* ----------------------------------------------------------------
-     *  Test 4: flush() drains the one queued entry (returns 1)
-     * ---------------------------------------------------------------- */
-    uart_puts("[tx_test] --- Test 4: flush() returns 1 ---\n");
-    {
-        int n = net_tx_flush();
-        TX_CHECK(n == 1, "net_tx_flush() returned 1 (one frame flushed)");
+            /* --------------------------------------------------------
+             *  Test 4: flush() drains the one queued entry (returns 1)
+             *  Keep IRQs off so the timer doesn't steal the frame.
+             * -------------------------------------------------------- */
+            uart_puts("[tx_test] --- Test 4: flush() returns 1 ---\n");
+            int n = net_tx_flush();
+            TX_CHECK(n == 1, "net_tx_flush() returned 1 (one frame flushed)");
+            __asm__ volatile("sti");
+        }
     }
     uart_puts("\n");
 

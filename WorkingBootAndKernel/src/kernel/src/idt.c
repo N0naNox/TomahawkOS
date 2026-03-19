@@ -4,6 +4,7 @@
 
 #include "include/idt.h"
 #include "include/hal_port_io.h"
+#include "include/panic.h"
 #include <string.h>
 #include <stdint.h>
 #include <uart.h>
@@ -56,7 +57,7 @@ extern void irq8(void); extern void irq9(void); extern void irq10(void); extern 
 extern void irq12(void); extern void irq13(void); extern void irq14(void); extern void irq15(void);
 
 /* Forward declaration of page fault handler */
-extern int page_fault_handler(uint64_t error_code, uint64_t faulting_address);
+extern int page_fault_handler(uint64_t error_code, uint64_t faulting_address, regs_t *regs);
 
 /* Helper to set an IDT entry */
 static void set_idt_gate(int n, uint64_t handler, uint16_t selector, uint8_t type_attr, uint8_t ist) {
@@ -102,12 +103,7 @@ void isr_common_handler(regs_t* r) {
 static void page_fault_wrapper(regs_t* r) {
     uint64_t cr2;
     __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
-    uart_puts("#PF err=");
-    uart_putu(r->err_code);
-    uart_puts(" cr2=");
-    uart_putu(cr2);
-    uart_puts("\n");
-    page_fault_handler(r->err_code, cr2);
+    page_fault_handler(r->err_code, cr2, r);
 }
 
 void register_interrupt_handler(int n, interrupt_handler_t h) {
@@ -120,21 +116,7 @@ void unregister_interrupt_handler(int n) {
 
 
 static void gpf_handler(regs_t* r) {
-    uart_puts("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
-    uart_puts("EXCEPTION: GENERAL PROTECTION FAULT (13)\n");
-    uart_puts("WE ARE OFFICIALLY IN USER MODE!\n");
-    uart_puts("Error Code: ");
-    uart_putu(r->err_code);
-    uart_puts("\nRIP: ");
-    uart_putu(r->rip);  // הכתובת המדויקת שגרמה לשגיאה
-    uart_puts("\nCS: ");
-    uart_putu(r->cs);   // כאן תוכל לראות אם זה קרה ב-Ring 3 (ערך 0x1B או 0x23)
-    uart_puts("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
-
-    // אנחנו לא יכולים להמשיך מ-GPF בדרך כלל, אז עוצרים
-    while(1) {
-        __asm__ volatile("hlt");
-    }
+    kernel_panic("General Protection Fault", r, 0);
 }
 
 

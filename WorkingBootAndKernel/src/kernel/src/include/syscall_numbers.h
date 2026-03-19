@@ -89,3 +89,10 @@
 #define SYS_PASS_DELETE 92   /* delete a user by name (root only)      */
 #define SYS_PROMOTE_USER 93  /* grant admin to user (admin only)       */
 #define SYS_DEMOTE_USER  94  /* revoke admin from user (admin only)    */
+
+/* File descriptor syscalls */
+#define SYS_OPEN   100  /* open(path, flags)  → fd or -errno      */
+#define SYS_READ   101  /* read(fd, buf, len) → bytes or -errno   */
+#define SYS_CLOSE  102  /* close(fd)          → 0 or -errno       */
+#define SYS_WRITE_FD 103 /* write(fd, buf, len) → bytes or -errno */
+#define SYS_DUP    104  /* dup(fd)            → new_fd or -errno  */

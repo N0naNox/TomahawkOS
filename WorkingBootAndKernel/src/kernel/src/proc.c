@@ -8,6 +8,7 @@
 #include "include/elf_loader.h"
 #include "include/vfs.h"
 #include "include/frame_alloc.h"
+#include "include/fd.h"
 #include <uart.h>
 
 /* Kernel stack size per thread */
@@ -110,6 +111,9 @@ pcb_t* create_process(const char* name, void (*entry)(void)) {
     p->next = process_list;
     process_list = p;
 
+    /* Open stdin/stdout/stderr on console TTY */
+    fd_init_stdio(p);
+
     return p;
 }
 
@@ -151,6 +155,9 @@ int fork_process(void) {
     /* Inherit credentials */
     child->uid  = parent->uid;
     child->gid  = parent->gid;
+
+    /* Inherit open file descriptors */
+    fd_clone(parent, child);
 
     /* Copy signal handlers (but not pending signals) */
     memcpy(&child->signals, &parent->signals, sizeof(signal_struct_t));

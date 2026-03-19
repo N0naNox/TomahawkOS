@@ -1,4 +1,5 @@
 #include "sys_proc.h"
+#include "include/errno.h"
 
 /**
  * @brief פונקציית עזר לבדיקת הרשאות בין תהליכים.
@@ -33,17 +34,17 @@ uint64_t sys_getpid(void) {
 }
 
 uint64_t sys_kill(uint64_t pid, int signo) {
-    if (signo <= 0 || signo >= NSIG) return (uint64_t)-1;
+    if (signo <= 0 || signo >= NSIG) return (uint64_t)(int64_t)-EINVAL;
 
     pcb_t* current = get_current_process();
     pcb_t* target = find_process_by_pid(pid);
 
-    if (!target) return (uint64_t)-1;
+    if (!target) return (uint64_t)(int64_t)-ESRCH;
 
     // אכיפת הרשאות Root/Owner
     if (!can_manage_process(current, target)) {
         uart_puts("[SECURITY] Permission denied for sys_kill\n");
-        return (uint64_t)-1; // בשלב הבא תחליף ל- -EPERM
+        return (uint64_t)(int64_t)-EPERM;
     }
 
     return (uint64_t)signal_send(target, signo);
@@ -51,8 +52,8 @@ uint64_t sys_kill(uint64_t pid, int signo) {
 
 uint64_t sys_signal(int signo, sig_handler_t handler) {
     pcb_t* proc = get_current_process();
-    if (!proc || signo <= 0 || signo >= NSIG) return (uint64_t)-1;
-    if (signo == SIGKILL || signo == SIGSTOP) return (uint64_t)-1;
+    if (!proc || signo <= 0 || signo >= NSIG) return (uint64_t)(int64_t)-EINVAL;
+    if (signo == SIGKILL || signo == SIGSTOP) return (uint64_t)(int64_t)-EINVAL;
 
     sig_handler_t old = proc->signals.handlers[signo];
     proc->signals.handlers[signo] = handler;
@@ -80,7 +81,7 @@ uint64_t sys_setpgid(uint64_t pid, uint64_t pgid) {
     } else {
         target = find_process_by_pid(pid);
     }
-    if (!target) return (uint64_t)-1;
+    if (!target) return (uint64_t)(int64_t)-ESRCH;
     return (uint64_t)setpgid(target, pgid);
 }
 
@@ -91,25 +92,25 @@ uint64_t sys_getpgid(uint64_t pid) {
     } else {
         target = find_process_by_pid(pid);
     }
-    if (!target) return (uint64_t)-1;
+    if (!target) return (uint64_t)(int64_t)-ESRCH;
     return target->pgid;
 }
 
 uint64_t sys_setsid(void) {
     pcb_t* proc = get_current_process();
-    if (!proc) return (uint64_t)-1;
+    if (!proc) return (uint64_t)(int64_t)-ESRCH;
     return (uint64_t)setsid(proc);
 }
 
 uint64_t sys_tcsetpgrp(uint64_t pgid) {
     pcb_t* proc = get_current_process();
-    if (!proc) return (uint64_t)-1;
+    if (!proc) return (uint64_t)(int64_t)-ESRCH;
     session_set_foreground(proc->sid, pgid);
     return 0;
 }
 
 uint64_t sys_tcgetpgrp(void) {
     pcb_t* proc = get_current_process();
-    if (!proc) return (uint64_t)-1;
+    if (!proc) return (uint64_t)(int64_t)-ESRCH;
     return session_get_foreground(proc->sid);
 }

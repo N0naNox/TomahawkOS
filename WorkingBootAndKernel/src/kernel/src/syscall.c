@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "scheduler.h"
 #include "syscall_numbers.h"
+#include "include/errno.h"
 #include "include/vga.h"
 #include "include/proc.h"
 #include "include/signal.h"
@@ -17,6 +18,7 @@
 #include "include/tty.h"
 #include "uart.h"
 #include "include/socket.h"
+#include "include/fd.h"
 
 /* External saved context from usermode demo */
 extern volatile uint64_t usermode_demo_return_rsp;
@@ -249,7 +251,7 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             /* Return UID from the current process PCB.
              * Sign-extend so UID -1 (not logged in) is negative in 64-bit. */
             pcb_t *_p = get_current_process();
-            return _p ? (uint64_t)(int64_t)(int32_t)_p->uid : (uint64_t)(int64_t)-1;
+            return _p ? (uint64_t)(int64_t)(int32_t)_p->uid : (uint64_t)(int64_t)-ESRCH;
         }
 
         case SYS_SETUID: {
@@ -258,11 +260,11 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
              * Any user may set UID to -1 (logout).
              * Any user may keep their own UID (no-op). */
             pcb_t *_p = get_current_process();
-            if (!_p) return (uint64_t)-1;
+            if (!_p) return (uint64_t)(int64_t)-ESRCH;
             if (_p->uid != 0 && _p->uid != (uint32_t)-1 &&
                 (uint32_t)arg1 != (uint32_t)-1 && _p->uid != (uint32_t)arg1) {
                 uart_puts("[SHELL] SYS_SETUID: permission denied\n");
-                return (uint64_t)-1;  /* EPERM */
+                return (uint64_t)(int64_t)-EPERM;
             }
             int was_guest = (_p->uid == (uint32_t)-1);
             _p->uid = (uint32_t)arg1;
@@ -364,7 +366,7 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
                 int ret = shell_fs_dispatch((const char *)arg1);
                 return (uint64_t)ret;
             }
-            return (uint64_t)-1;
+            return (uint64_t)(int64_t)-EINVAL;
 
         /* ===== Job control syscalls ===== */
         case SYS_SETPGID:
@@ -394,10 +396,10 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             if (arg1 && arg2) {
                 struct vnode *parent = NULL;
                 if (vfs_resolve_path((const char *)arg1, &parent) != 0 || !parent)
-                    return (uint64_t)-1;
+                    return (uint64_t)(int64_t)-ENOENT;
                 return (uint64_t)vfs_unlink(parent, (const char *)arg2);
             }
-            return (uint64_t)-1;
+            return (uint64_t)(int64_t)-EINVAL;
 
         case SYS_RENAME:
             /* arg1 = old full path (const char *)
@@ -440,22 +442,22 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
                 struct vnode *old_parent = NULL, *new_parent = NULL;
                 if (vfs_resolve_path(old_parent_buf, &old_parent) != 0 || !old_parent)
-                    return (uint64_t)-1;
+                    return (uint64_t)(int64_t)-ENOENT;
                 if (vfs_resolve_path(new_parent_buf, &new_parent) != 0 || !new_parent)
-                    return (uint64_t)-1;
+                    return (uint64_t)(int64_t)-ENOENT;
                 return (uint64_t)vfs_rename(old_parent, old_name, new_parent, new_name);
             }
-            return (uint64_t)-1;
+            return (uint64_t)(int64_t)-EINVAL;
 
         case SYS_CHMOD:
             /* arg1 = path (const char *), arg2 = mode (uint16_t) */
             if (arg1) {
                 struct vnode *vp = NULL;
                 if (vfs_resolve_path((const char *)arg1, &vp) != 0 || !vp)
-                    return (uint64_t)-1;
+                    return (uint64_t)(int64_t)-ENOENT;
                 return (uint64_t)vfs_chmod(vp, (uint16_t)arg2);
             }
-            return (uint64_t)-1;
+            return (uint64_t)(int64_t)-EINVAL;
 
         /* ===== FAT32 filesystem syscalls ===== */
         case SYS_RUN_FAT32_DEMO:
@@ -482,17 +484,17 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         case SYS_FAT32_WRITE:
-            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_write((const char *)arg1);
             return 0;
 
         case SYS_FAT32_MKDIR:
-            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_mkdir((const char *)arg1);
             return 0;
 
         case SYS_FAT32_RM:
-            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_rm((const char *)arg1);
             return 0;
 
@@ -501,17 +503,17 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             return 0;
 
         case SYS_FAT32_RENAME:
-            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_rename((const char *)arg1);
             return 0;
 
         case SYS_FAT32_CHMOD:
-            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_chmod((const char *)arg1);
             return 0;
 
         case SYS_FAT32_TOUCH:
-            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)-1; }
+            if (!fat32_check_write_perm()) { vga_write("[ERROR] Permission denied\n"); return (uint64_t)(int64_t)-EACCES; }
             shell_fat32_touch((const char *)arg1);
             return 0;
 
@@ -627,7 +629,7 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
 
         case SYS_PASS_CHANGE:
             /* arg1 = old_password, arg2 = new_password; acts on current logged-in user */
-            if (shell_current_uid < 0) return (uint64_t)-1;
+            if (shell_current_uid < 0) return (uint64_t)(int64_t)-EPERM;
             return (uint64_t)password_store_change_password(
                 shell_current_uid, (const char*)arg1, (const char*)arg2);
 
@@ -635,12 +637,12 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             /* arg1 = cmdline "userdel <username>"; only admins may do this */
             if (shell_current_uid < 0 || !password_store_is_admin(shell_current_uid)) {
                 uart_puts("[KERNEL] userdel: permission denied\n");
-                return (uint64_t)-1;
+                return (uint64_t)(int64_t)-EPERM;
             }
             const char *del_name = skip_to_arg1((const char*)arg1);
-            if (!del_name) return (uint64_t)-1;
+            if (!del_name) return (uint64_t)(int64_t)-EINVAL;
             int del_uid = password_store_get_uid(del_name);
-            if (del_uid < 0) return (uint64_t)-1;
+            if (del_uid < 0) return (uint64_t)(int64_t)-ENOENT;
             return (uint64_t)password_store_delete(del_uid);
         }
 
@@ -648,12 +650,12 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             /* arg1 = cmdline "promote <username>"; only admins may do this */
             if (shell_current_uid < 0 || !password_store_is_admin(shell_current_uid)) {
                 vga_write("[ERROR] Permission denied: admin only.\n");
-                return (uint64_t)-1;
+                return (uint64_t)(int64_t)-EPERM;
             }
             const char *pname = skip_to_arg1((const char*)arg1);
-            if (!pname) { vga_write("[ERROR] Usage: promote <username>\n"); return (uint64_t)-1; }
+            if (!pname) { vga_write("[ERROR] Usage: promote <username>\n"); return (uint64_t)(int64_t)-EINVAL; }
             int puid = password_store_get_uid(pname);
-            if (puid < 0) { vga_write("[ERROR] User not found.\n"); return (uint64_t)-1; }
+            if (puid < 0) { vga_write("[ERROR] User not found.\n"); return (uint64_t)(int64_t)-ENOENT; }
             if (puid == 0) { vga_write("[INFO] User is already root admin.\n"); return 0; }
             password_store_set_admin(puid, 1);
             vga_write("[OK] User promoted to admin.\n");
@@ -664,22 +666,107 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             /* arg1 = cmdline "demote <username>"; only admins may do this */
             if (shell_current_uid < 0 || !password_store_is_admin(shell_current_uid)) {
                 vga_write("[ERROR] Permission denied: admin only.\n");
-                return (uint64_t)-1;
+                return (uint64_t)(int64_t)-EPERM;
             }
             const char *dname = skip_to_arg1((const char*)arg1);
-            if (!dname) { vga_write("[ERROR] Usage: demote <username>\n"); return (uint64_t)-1; }
+            if (!dname) { vga_write("[ERROR] Usage: demote <username>\n"); return (uint64_t)(int64_t)-EINVAL; }
             int duid = password_store_get_uid(dname);
-            if (duid < 0) { vga_write("[ERROR] User not found.\n"); return (uint64_t)-1; }
-            if (duid == 0) { vga_write("[ERROR] Cannot demote root admin.\n"); return (uint64_t)-1; }
+            if (duid < 0) { vga_write("[ERROR] User not found.\n"); return (uint64_t)(int64_t)-ENOENT; }
+            if (duid == 0) { vga_write("[ERROR] Cannot demote root admin.\n"); return (uint64_t)(int64_t)-EPERM; }
             password_store_set_admin(duid, 0);
             vga_write("[OK] Admin privileges revoked.\n");
             return 0;
+        }
+
+        /* ===== File descriptor syscalls ===== */
+
+        case SYS_OPEN: {
+            /* arg1 = path (const char*), arg2 = flags */
+            const char *path = (const char *)arg1;
+            uint16_t flags = (uint16_t)arg2;
+            if (!path) return (uint64_t)(int64_t)-EINVAL;
+
+            struct vnode *vp = NULL;
+            int r = vfs_resolve_path(path, &vp);
+            if (r != 0 || !vp) return (uint64_t)(int64_t)-ENOENT;
+
+            if (vp->v_op && vp->v_op->vop_open) {
+                r = vp->v_op->vop_open(vp);
+                if (r != 0) return (uint64_t)(int64_t)-EIO;
+            }
+
+            struct file *f = file_alloc(vp, flags);
+            if (!f) return (uint64_t)(int64_t)-ENOMEM;
+
+            pcb_t *cur = get_current_process();
+            if (!cur) { f->refcount = 0; return (uint64_t)(int64_t)-ESRCH; }
+            int fd = fd_alloc(cur, f);
+            if (fd < 0) { f->refcount = 0; return (uint64_t)(int64_t)fd; }
+            /* fd_alloc bumped refcount to 2; drop the initial 1 from file_alloc */
+            f->refcount--;
+            return (uint64_t)fd;
+        }
+
+        case SYS_READ: {
+            /* arg1 = fd, arg2 = buf, arg3 = len */
+            pcb_t *cur = get_current_process();
+            if (!cur) return (uint64_t)(int64_t)-ESRCH;
+            struct file *f = fd_get(cur, (int)arg1);
+            if (!f) return (uint64_t)(int64_t)-EBADF;
+            if ((f->f_flags & O_ACCMODE) == O_WRONLY) return (uint64_t)(int64_t)-EBADF;
+            if (!f->f_vnode) return (uint64_t)(int64_t)-EBADF;
+
+            if (f->f_vnode->v_op && f->f_vnode->v_op->vop_read_at) {
+                int n = f->f_vnode->v_op->vop_read_at(f->f_vnode, (void *)arg2, (size_t)arg3, f->f_offset);
+                if (n > 0) f->f_offset += n;
+                return (uint64_t)(int64_t)n;
+            }
+            if (f->f_vnode->v_op && f->f_vnode->v_op->vop_read) {
+                int n = f->f_vnode->v_op->vop_read(f->f_vnode, (void *)arg2, (size_t)arg3);
+                if (n > 0) f->f_offset += n;
+                return (uint64_t)(int64_t)n;
+            }
+            return (uint64_t)(int64_t)-ENOSYS;
+        }
+
+        case SYS_WRITE_FD: {
+            /* arg1 = fd, arg2 = buf, arg3 = len */
+            pcb_t *cur = get_current_process();
+            if (!cur) return (uint64_t)(int64_t)-ESRCH;
+            struct file *f = fd_get(cur, (int)arg1);
+            if (!f) return (uint64_t)(int64_t)-EBADF;
+            if ((f->f_flags & O_ACCMODE) == O_RDONLY) return (uint64_t)(int64_t)-EBADF;
+            if (!f->f_vnode) return (uint64_t)(int64_t)-EBADF;
+
+            if (f->f_vnode->v_op && f->f_vnode->v_op->vop_write_at) {
+                int n = f->f_vnode->v_op->vop_write_at(f->f_vnode, (const void *)arg2, (size_t)arg3, f->f_offset);
+                if (n > 0) f->f_offset += n;
+                return (uint64_t)(int64_t)n;
+            }
+            if (f->f_vnode->v_op && f->f_vnode->v_op->vop_write) {
+                int n = f->f_vnode->v_op->vop_write(f->f_vnode, (void *)arg2, (size_t)arg3);
+                if (n > 0) f->f_offset += n;
+                return (uint64_t)(int64_t)n;
+            }
+            return (uint64_t)(int64_t)-ENOSYS;
+        }
+
+        case SYS_CLOSE: {
+            pcb_t *cur = get_current_process();
+            if (!cur) return (uint64_t)(int64_t)-ESRCH;
+            return (uint64_t)(int64_t)fd_close(cur, (int)arg1);
+        }
+
+        case SYS_DUP: {
+            pcb_t *cur = get_current_process();
+            if (!cur) return (uint64_t)(int64_t)-ESRCH;
+            return (uint64_t)(int64_t)fd_dup(cur, (int)arg1);
         }
 
         default:
             uart_puts("[KERNEL] Unknown syscall: ");
             uart_putu(syscall_num);
             uart_puts("\n");
-            return (uint64_t)-1;
+            return (uint64_t)(int64_t)-ENOSYS;
     }
 }
