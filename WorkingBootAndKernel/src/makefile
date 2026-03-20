@@ -94,7 +94,7 @@ ${INITRD}: ${USER_BINARY} | ${BUILD_DIR}
 	# Install user binaries into userland root before packing.
 	cp -f ${USER_BINARY} ${USERLAND_ROOT}/bin/user.elf
 	# Build initrd as a cpio newc archive of the userland_root tree.
-	cd ${USERLAND_ROOT} && find . -not -name '.gitkeep' | cpio -o -H newc > $(abspath ${INITRD})
+	cd ${USERLAND_ROOT} && find . -not -name '.gitkeep' | cpio -o -H newc > ../build/initrd.img
 
 clean:
 	make clean -C ${BOOTLOADER_DIR}
