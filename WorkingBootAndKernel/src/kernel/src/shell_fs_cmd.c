@@ -370,9 +370,8 @@ static void cmd_stat(const char *args) {
 
     struct vnode *vp = vfs_resolve_path_ramfs(path);
     if (!vp) {
-        vga_write("stat: '");
-        vga_write(path);
-        vga_write("': No such file or directory\n");
+        /* Not found in ramfs — try FAT32 */
+        shell_fat32_stat(args);
         return;
     }
 

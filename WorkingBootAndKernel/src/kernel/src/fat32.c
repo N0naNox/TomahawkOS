@@ -320,6 +320,10 @@ static struct vnode *fat32_create_vnode(struct fat32_mount *mnt,
     vp->v_data       = fvd;
     vp->v_mount_data = mnt;
 
+    /* Track vnode for cleanup on unmount */
+    if (mnt->vnode_count < 256)
+        mnt->vnodes[mnt->vnode_count++] = vp;
+
     return vp;
 }
 
@@ -521,12 +525,16 @@ int fat32_unmount(struct vnode *root) {
     /* Flush to device */
     buffer_sync_all(mnt->dev);
 
-    /* Free root vnode data */
-    if (root->v_data) {
-        pfa_free_frame((uintptr_t)root->v_data);
+    /* Free all tracked vnodes (includes root) */
+    for (int i = 0; i < mnt->vnode_count; i++) {
+        struct vnode *vp = mnt->vnodes[i];
+        if (!vp) continue;
+        if (vp->v_data)
+            pfa_free_frame((uintptr_t)vp->v_data);
+        pfa_free_frame((uintptr_t)vp);
     }
+
     pfa_free_frame((uintptr_t)mnt);
-    pfa_free_frame((uintptr_t)root);
 
     uart_puts("[FAT32] Unmounted\n");
     return 0;
@@ -919,6 +927,9 @@ static int lookup_callback(const char *name, const struct fat32_dirent *de,
 
     if (fat32_name_cmp_ci(name, ctx->target_name) == 0) {
         uint32_t cluster = FAT32_DIRENT_CLUSTER(de);
+        /* FAT32 spec: ".." with cluster=0 means root directory */
+        if (cluster == 0)
+            cluster = ctx->mnt->root_cluster;
         uint32_t size    = de->DIR_FileSize;
         uint8_t  attr    = de->DIR_Attr;
 

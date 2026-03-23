@@ -68,6 +68,14 @@ int page_not_present_handler(uint64_t faulting_address)
     // align to 4 KiB page
     uint64_t page_addr = faulting_address & ~0xFFFULL;
 
+    /* Reject obviously invalid addresses (e.g. -1 from error returns) */
+    if (faulting_address == 0 || faulting_address >= 0xFFFFFFFF80000000ULL) {
+        uart_puts("page_not_present: rejecting bad address 0x");
+        uart_puthex(faulting_address);
+        uart_puts("\n");
+        return -1;
+    }
+
     uintptr_t phys = pfa_alloc_frame();
     if (!phys)
     {

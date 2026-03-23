@@ -1061,7 +1061,10 @@ void shell_fat32_umount(const char *cmdline) {
         return;
     }
     fat32_sync(g_fat32_root);
-    fat32_unmount(g_fat32_root);
+    /* Remove mount table entry (also calls fat32_unmount internally).
+       If not in mount table, unmount directly. */
+    if (do_unmount("/mnt/fat") != 0)
+        fat32_unmount(g_fat32_root);
     g_fat32_root = NULL;
     g_fat32_cwd  = NULL;
     g_fat32_mounted = 0;
@@ -1072,6 +1075,41 @@ void shell_fat32_umount(const char *cmdline) {
 /* --- CWD path getter (used by syscall.c for permission checks) --- */
 const char *shell_fat32_get_cwd_path(void) {
     return g_fat32_cwd_path;
+}
+
+/* --- Recursively delete a directory and all its contents --- */
+void shell_fat32_delete_home(const char *username) {
+    if (!g_fat32_mounted || !g_fat32_root || !username || !username[0]) return;
+    struct vnode *home_dir = NULL;
+    if (vfs_lookup(g_fat32_root, "home", &home_dir) != 0 || !home_dir) return;
+    struct vnode *user_dir = NULL;
+    if (vfs_lookup(home_dir, username, &user_dir) != 0 || !user_dir) return;
+
+    /* Delete all entries inside the user's home directory */
+    struct vfs_dirent dent;
+    uint64_t off;
+    int safety = 256;
+    for (;;) {
+        off = 0;
+        int found = 0;
+        while (vfs_readdir(user_dir, &dent, &off) == 0) {
+            if (dent.d_name[0] == '.' &&
+                (dent.d_name[1] == '\0' ||
+                 (dent.d_name[1] == '.' && dent.d_name[2] == '\0')))
+                continue;
+            /* Remove this entry (files or empty subdirs) */
+            vfs_remove(user_dir, dent.d_name);
+            found = 1;
+            break; /* restart iteration since directory changed */
+        }
+        if (!found || --safety <= 0) break;
+    }
+
+    /* Now remove the (hopefully empty) user directory itself */
+    vfs_remove(home_dir, username);
+    uart_puts("[KERNEL] Deleted home dir for ");
+    uart_puts(username);
+    uart_puts("\n");
 }
 
 /* --- Ensure /home/<username> exists on the FAT32 volume --- */
@@ -1124,9 +1162,13 @@ void shell_fat32_ls(const char *cmdline) {
         while (dent.d_name[nlen]) nlen++;
         vga_write(dent.d_name);
         for (int pad = nlen; pad < 19; pad++) vga_write(" ");
-        vga_write(dent.d_type == VDIR ? "DIR       " : "FILE      ");
-        int_to_str((int)dent.d_size, num, 10);
-        vga_write(num);
+        if (dent.d_type == VDIR) {
+            vga_write("DIR       -");
+        } else {
+            vga_write("FILE      ");
+            int_to_str((int)dent.d_size, num, 10);
+            vga_write(num);
+        }
         vga_write("\n");
         count++;
     }
@@ -1134,6 +1176,50 @@ void shell_fat32_ls(const char *cmdline) {
     int_to_str(count, num, 10);
     vga_write(num);
     vga_write(" entries)\n");
+}
+
+/* --- stat --- */
+void shell_fat32_stat(const char *cmdline) {
+    if (!g_fat32_mounted) {
+        vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
+        return;
+    }
+    char name[64];
+    if (cmdline_get_arg(cmdline, 1, name, 64, 0) <= 0) {
+        vga_write("stat: missing file operand\n");
+        return;
+    }
+    struct vnode *vp = NULL;
+    int rc = vfs_lookup(g_fat32_cwd, name, &vp);
+    if (rc != 0 || !vp) {
+        vga_write("stat: '");
+        vga_write(name);
+        vga_write("': No such file or directory\n");
+        return;
+    }
+    char num[16];
+    vga_write("  File: ");
+    vga_write(name);
+    vga_write("\n  Type: ");
+    vga_write(vp->v_type == VDIR ? "directory" : "regular file");
+    vga_write("\n  Size: ");
+    if (vp->v_type == VDIR) {
+        /* Count children via readdir */
+        struct vfs_dirent dent;
+        uint64_t off = 0;
+        int children = 0;
+        while (vfs_readdir(vp, &dent, &off) == 0)
+            children++;
+        int_to_str(children, num, 10);
+        vga_write(num);
+        vga_write(" entries");
+    } else {
+        int64_t sz = vfs_getsize(vp);
+        int_to_str((int)sz, num, 10);
+        vga_write(num);
+        vga_write(" bytes");
+    }
+    vga_write("\n");
 }
 
 /* --- cat --- */
@@ -1280,52 +1366,92 @@ void shell_fat32_rm(const char *cmdline) {
         vga_write("[ERROR] Remove failed.\n");
 }
 
-/* --- cd --- */
+/* --- cd: supports single name, relative paths, and absolute paths --- */
 void shell_fat32_cd(const char *cmdline) {
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
-    char name[64];
-    if (cmdline_get_arg(cmdline, 1, name, 64, 0) <= 0) {
+    char path[256];
+    if (cmdline_get_arg(cmdline, 1, path, 256, 0) <= 0) {
         vga_write("Directory: ");
-        if (fat32_read_line(name, 64) <= 0) return;
+        if (fat32_read_line(path, 256) <= 0) return;
     }
-    if (name[0] == '/' && name[1] == '\0') {
-        g_fat32_cwd = g_fat32_root;
-        g_fat32_cwd_path[0] = '/';
-        g_fat32_cwd_path[1] = '\0';
-        vga_write("[OK] Changed to /\n");
-        return;
-    }
-    struct vnode *vp = NULL;
-    int rc = vfs_lookup(g_fat32_cwd, name, &vp);
-    if (rc != 0 || !vp) {
-        vga_write("[ERROR] Directory not found.\n");
-        return;
-    }
-    g_fat32_cwd = vp;
-    /* Update CWD path string */
-    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
-        /* Go up: strip last path component */
-        int len = 0;
-        while (g_fat32_cwd_path[len]) len++;
-        if (len > 1) {
-            int i = len - 1;
-            if (g_fat32_cwd_path[i] == '/') i--;
-            while (i > 0 && g_fat32_cwd_path[i] != '/') i--;
-            if (i == 0) { g_fat32_cwd_path[0] = '/'; g_fat32_cwd_path[1] = '\0'; }
-            else g_fat32_cwd_path[i] = '\0';
-        }
+
+    /* Determine starting point: absolute or relative */
+    struct vnode *cur = g_fat32_cwd;
+    char new_path[256];
+    int npos = 0;
+    const char *p = path;
+
+    if (*p == '/') {
+        /* Absolute path: start from root */
+        cur = g_fat32_root;
+        new_path[0] = '/'; new_path[1] = '\0'; npos = 1;
+        p++; /* skip leading '/' */
     } else {
-        /* Append /name */
-        int len = 0;
-        while (g_fat32_cwd_path[len]) len++;
-        if (len > 1) g_fat32_cwd_path[len++] = '/';
-        for (int i = 0; name[i] && len < 254; i++)
-            g_fat32_cwd_path[len++] = name[i];
-        g_fat32_cwd_path[len] = '\0';
+        /* Relative path: copy current cwd_path as base */
+        for (int i = 0; g_fat32_cwd_path[i] && npos < 254; i++)
+            new_path[npos++] = g_fat32_cwd_path[i];
+        new_path[npos] = '\0';
     }
+
+    /* Walk each component separated by '/' */
+    while (*p) {
+        /* Skip slashes */
+        while (*p == '/') p++;
+        if (*p == '\0') break;
+
+        /* Extract next component */
+        char comp[64];
+        int ci = 0;
+        while (*p && *p != '/' && ci < 63) comp[ci++] = *p++;
+        comp[ci] = '\0';
+
+        if (comp[0] == '.' && comp[1] == '\0') {
+            /* "." – stay in current directory */
+            continue;
+        }
+
+        if (comp[0] == '.' && comp[1] == '.' && comp[2] == '\0') {
+            /* ".." – go up one level */
+            struct vnode *parent = NULL;
+            int rc = vfs_lookup(cur, "..", &parent);
+            if (rc != 0 || !parent) {
+                vga_write("[ERROR] Cannot go up.\n");
+                return;
+            }
+            cur = parent;
+            /* Strip last path component from new_path */
+            if (npos > 1) {
+                int i = npos - 1;
+                if (new_path[i] == '/') i--;
+                while (i > 0 && new_path[i] != '/') i--;
+                if (i == 0) { new_path[0] = '/'; new_path[1] = '\0'; npos = 1; }
+                else { new_path[i] = '\0'; npos = i; }
+            }
+            continue;
+        }
+
+        /* Normal component: lookup */
+        struct vnode *child = NULL;
+        int rc = vfs_lookup(cur, comp, &child);
+        if (rc != 0 || !child) {
+            vga_write("[ERROR] Not found: ");
+            vga_write(comp);
+            vga_write("\n");
+            return;
+        }
+        cur = child;
+        /* Append /comp to new_path */
+        if (npos > 1) new_path[npos++] = '/';
+        for (int i = 0; comp[i] && npos < 254; i++)
+            new_path[npos++] = comp[i];
+        new_path[npos] = '\0';
+    }
+
+    g_fat32_cwd = cur;
+    for (int i = 0; i <= npos; i++) g_fat32_cwd_path[i] = new_path[i];
     vga_write("[OK] Changed directory.\n");
 }
 
@@ -1611,28 +1737,30 @@ void run_tomahawk_shell(void) {
     if (!_cfg_host || !_cfg_host[0]) _cfg_host = "tomahawk";
     if (!_cfg_user || !_cfg_user[0]) _cfg_user = "guest";
 
-    /* Guest/default prompt: "<username>@<hostname>> " */
+    /* Guest/default prompt: "<username>@<hostname>:" */
     char _guest_prompt[64];
     {
         char *_q = _guest_prompt;
         for (const char *_c = _cfg_user; *_c; _c++) *_q++ = *_c;
         *_q++ = '@';
         for (const char *_c = _cfg_host; *_c; _c++) *_q++ = *_c;
-        *_q++ = '>'; *_q++ = ' '; *_q = '\0';
+        *_q++ = ':'; *_q = '\0';
     }
-    /* Logged-in suffix: "@<hostname>> " */
+    /* Logged-in suffix: "@<hostname>:" */
     char _at_prompt[64];
     {
         char *_q = _at_prompt;
         *_q++ = '@';
         for (const char *_c = _cfg_host; *_c; _c++) *_q++ = *_c;
-        *_q++ = '>'; *_q++ = ' '; *_q = '\0';
+        *_q++ = ':'; *_q = '\0';
     }
 
     uint64_t s_prompt_guest = SHELL_DATA + off; size_t s_prompt_guest_len = 0;
     { const char *_s = _guest_prompt; while (*_s) { data_ptr[off++] = (uint8_t)*_s++; s_prompt_guest_len++; } data_ptr[off++] = 0; }
     uint64_t s_prompt_at = SHELL_DATA + off; size_t s_prompt_at_len = 0;
     { const char *_s = _at_prompt; while (*_s) { data_ptr[off++] = (uint8_t)*_s++; s_prompt_at_len++; } data_ptr[off++] = 0; }
+
+    PLACE_STR(s_prompt_end, "> ")
 
     PLACE_STR(s_user, "Username: ")
     PLACE_STR(s_pass, "Password: ")
@@ -1685,8 +1813,13 @@ void run_tomahawk_shell(void) {
     uint64_t userbuf = SHELL_BUF + 128; /* username buffer */
     uint64_t passbuf = SHELL_BUF + 192; /* password buffer */
     uint64_t namebuf = SHELL_BUF + 256; /* current username buffer */
+    uint64_t cwdbuf  = SHELL_BUF + 320; /* cwd path buffer */
     
     uart_puts("[SHELL] Generating shell code...\n");
+    
+    /* Disable interrupts during JIT code generation to prevent
+       timer-driven context switches from corrupting register state. */
+    __asm__ volatile("cli");
     
     /* Generate code */
     uint8_t *p = code_ptr;
@@ -1694,8 +1827,9 @@ void run_tomahawk_shell(void) {
     /* Print banner */
     p = emit_print(p, s_banner, s_banner_len);
     
-    /* Print help */
-    p = emit_print(p, s_help, s_help_len);
+    /* Auto-mount FAT32 volume */
+    p = emit_mov64(p, 7, cmdbuf);   /* rdi = dummy arg (not used) */
+    p = emit_syscall_only(p, 50);   /* SYS_FAT32_MOUNT */
     
     /* ===== MAIN SHELL LOOP ===== */
     uint8_t *shell_loop = p;
@@ -1735,16 +1869,45 @@ void run_tomahawk_shell(void) {
     *p++ = (uint8_t)name_loop_off;
     *end_name = (uint8_t)(p - end_name - 1);
     
-    /* Print "@tomahawk> " */
+    /* Print "@tomahawk:" */
     p = emit_print(p, s_prompt_at, s_prompt_at_len);
-    *p++ = 0xEB; uint8_t *skip_guest = p; *p++ = 0x00; /* jmp read_cmd */
+    *p++ = 0xEB; uint8_t *skip_guest = p; *p++ = 0x00; /* jmp print_cwd */
     
     /* guest_prompt: */
     *jguest = (uint8_t)(p - jguest - 1);
     p = emit_print(p, s_prompt_guest, s_prompt_guest_len);
     
-    /* read_cmd: */
+    /* print_cwd: both paths converge here */
     *skip_guest = (uint8_t)(p - skip_guest - 1);
+    
+    /* Get CWD into cwdbuf: syscall 106(buf, size) */
+    p = emit_mov64(p, 7, cwdbuf);   /* rdi = buffer */
+    p = emit_mov64(p, 6, 256);      /* rsi = size   */
+    p = emit_syscall_only(p, 106);   /* SYS_GETCWD   */
+    
+    /* Print CWD char by char */
+    p = emit_mov64(p, 13, cwdbuf);   /* r13 = ptr */
+    uint8_t *print_cwd_loop = p;
+    /* mov al, [r13] */
+    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x45; *p++ = 0x00;
+    /* test al, al */
+    *p++ = 0x84; *p++ = 0xC0;
+    /* jz end_cwd */
+    *p++ = 0x74; uint8_t *end_cwd = p; *p++ = 0x00;
+    /* movzx rdi, al */
+    *p++ = 0x48; *p++ = 0x0F; *p++ = 0xB6; *p++ = 0xF8;
+    /* syscall(15) putchar */
+    p = emit_syscall_only(p, 15);
+    /* inc r13 */
+    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
+    /* jmp loop */
+    *p++ = 0xEB;
+    int8_t cwd_loop_off = (int8_t)(print_cwd_loop - p - 1);
+    *p++ = (uint8_t)cwd_loop_off;
+    *end_cwd = (uint8_t)(p - end_cwd - 1);
+    
+    /* Print "> " suffix */
+    p = emit_print(p, s_prompt_end, s_prompt_end_len);
     
     /* Read command line into cmdbuf using SYS_READLINE (full line editing
        with cursor movement, arrow keys, and command history). */
@@ -2466,6 +2629,10 @@ void run_tomahawk_shell(void) {
         }
     }
     uart_puts("[SHELL] Code generated, launching...\n");
+    
+    /* Re-enable interrupts now that codegen is complete. */
+    __asm__ volatile("sti");
+    
     vga_write("Launching Tomahawk Shell in Ring 3...\n\n");
     
     /* Save kernel context */

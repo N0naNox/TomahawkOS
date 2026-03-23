@@ -43,6 +43,7 @@ void run_fat32_demo(void);
 void shell_fat32_mount(const char *cmdline);
 void shell_fat32_umount(const char *cmdline);
 void shell_fat32_ls(const char *cmdline);
+void shell_fat32_stat(const char *cmdline);
 void shell_fat32_cat(const char *cmdline);
 void shell_fat32_write(const char *cmdline);
 void shell_fat32_mkdir(const char *cmdline);
@@ -56,5 +57,6 @@ void shell_fat32_touch(const char *cmdline);
 const char *shell_fat32_get_cwd_path(void);
 void shell_fat32_ensure_home(const char *username);
 void shell_fat32_cd_to_home(const char *username);
+void shell_fat32_delete_home(const char *username);
 
 #endif /* DEMOS_H */

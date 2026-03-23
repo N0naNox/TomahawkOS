@@ -52,19 +52,23 @@ static int to_lower(int c) {
 }
 
 /* Check if the current user has FAT32 write permission.
- * - Not logged in → deny
  * - Admin (uid 0 or is_admin) → allow everywhere
- * - Regular user → only inside /home/<username>
- * - Guest (logged out) → deny */
+ * - Guest (uid < 0) → only inside /home/guest
+ * - Regular user → only inside /home/<username> */
 static int fat32_check_write_perm(void) {
-    if (shell_current_uid < 0) return 0;
     if (shell_current_uid == 0) return 1;
-    if (password_store_is_admin(shell_current_uid)) return 1;
-    /* Regular user: check if CWD is at or under /home/<username> */
+    if (shell_current_uid > 0 && password_store_is_admin(shell_current_uid)) return 1;
+    /* Guest or regular user: check if CWD is at or under /home/<username> */
     const char *cwd = shell_fat32_get_cwd_path();
     char uname[32];
-    if (password_store_get_username(shell_current_uid, uname, 32) != 0 || !uname[0])
-        return 0;
+    if (shell_current_uid < 0) {
+        /* Guest user */
+        uname[0] = 'g'; uname[1] = 'u'; uname[2] = 'e';
+        uname[3] = 's'; uname[4] = 't'; uname[5] = '\0';
+    } else {
+        if (password_store_get_username(shell_current_uid, uname, 32) != 0 || !uname[0])
+            return 0;
+    }
     /* Build expected prefix "/home/<username>" */
     char prefix[64];
     int pos = 0;
@@ -702,7 +706,17 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             if (!del_name) return (uint64_t)(int64_t)-EINVAL;
             int del_uid = password_store_get_uid(del_name);
             if (del_uid < 0) return (uint64_t)(int64_t)-ENOENT;
-            return (uint64_t)password_store_delete(del_uid);
+            /* Copy username before deletion (for home dir cleanup) */
+            char del_uname[32];
+            int di = 0;
+            for (; del_name[di] && di < 31; di++) del_uname[di] = del_name[di];
+            del_uname[di] = '\0';
+            int rc = password_store_delete(del_uid);
+            if (rc == 0) {
+                /* Delete the user's home directory */
+                shell_fat32_delete_home(del_uname);
+            }
+            return (uint64_t)rc;
         }
 
         case SYS_PROMOTE_USER: {
@@ -830,6 +844,19 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             pcb_t *cur = get_current_process();
             if (!cur) return (uint64_t)(int64_t)-ESRCH;
             return (uint64_t)(int64_t)fd_dup(cur, (int)arg1);
+        }
+
+        case SYS_GETCWD: {
+            /* arg1 = buffer, arg2 = buffer size */
+            if (validate_user_buf((void *)arg1, arg2))
+                return (uint64_t)(int64_t)-EFAULT;
+            const char *cwd_str = shell_fat32_get_cwd_path();
+            char *dst = (char *)arg1;
+            int i = 0;
+            for (; cwd_str[i] && i < (int)arg2 - 1; i++)
+                dst[i] = cwd_str[i];
+            dst[i] = '\0';
+            return (uint64_t)i;
         }
 
         case SYS_PIPE: {

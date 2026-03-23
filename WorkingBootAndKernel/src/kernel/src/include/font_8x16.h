@@ -611,10 +611,9 @@ static inline void draw_char_8x16(volatile uint32_t *fb, uint32_t pitch,
         uint32_t py = y + r;
         if (py >= h) break;
         for (int col = 0; col < 8; col++) {
-            if (bits & (1 << col)) {
-                uint32_t px = x + col;
-                if (px < w) fb[py * pitch + px] = 0xFFFFFFFF;
-            }
+            uint32_t px = x + col;
+            if (px < w)
+                fb[py * pitch + px] = (bits & (1 << col)) ? 0xFFFFFFFF : 0x00000000;
         }
     }
 }
@@ -629,10 +628,9 @@ static inline void draw_char_16x32(volatile uint32_t *fb, uint32_t pitch,
         uint32_t py = y + r;
         if (py >= h) break;
         for (int col = 0; col < 16; col++) {
-            if (bits & (1 << col)) {
-                uint32_t px = x + col;
-                if (px < w) fb[py * pitch + px] = 0xFFFFFFFF;
-            }
+            uint32_t px = x + col;
+            if (px < w)
+                fb[py * pitch + px] = (bits & (1 << col)) ? 0xFFFFFFFF : 0x00000000;
         }
     }
 }
@@ -647,10 +645,9 @@ static inline void draw_char_24x48(volatile uint32_t *fb, uint32_t pitch,
         uint32_t py = y + r;
         if (py >= h) break;
         for (int col = 0; col < 24; col++) {
-            if (bits & (1 << col)) {
-                uint32_t px = x + col;
-                if (px < w) fb[py * pitch + px] = 0xFFFFFFFF;
-            }
+            uint32_t px = x + col;
+            if (px < w)
+                fb[py * pitch + px] = (bits & (1 << col)) ? 0xFFFFFFFF : 0x00000000;
         }
     }
 }

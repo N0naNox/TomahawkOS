@@ -215,6 +215,10 @@ struct fat32_mount {
 
     /* Volume label (space-padded, not null-terminated from disk) */
     char volume_label[12];          /* 11 chars + NUL                        */
+
+    /* Vnode tracking — freed on unmount */
+    struct vnode *vnodes[256];      /* All vnodes created for this mount      */
+    int           vnode_count;      /* Number of tracked vnodes               */
 };
 
 /* ========== Helper Macros ========== */
