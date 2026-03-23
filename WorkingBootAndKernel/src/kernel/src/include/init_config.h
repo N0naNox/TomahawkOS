@@ -80,3 +80,21 @@ void init_config_dump(void);
  * @return 0 on success, -1 on error.
  */
 int init_config_create_vfs_copy(void);
+
+/**
+ * @brief Set or update a config value by key.
+ * @return 0 on success, -1 on error.
+ */
+int init_config_set(const char *key, const char *val);
+
+/** @brief Return number of config entries. */
+int init_config_get_count(void);
+
+/** @brief Get key/val pointers for entry at index. */
+int init_config_get_entry(int index, const char **key, const char **val);
+
+/**
+ * @brief Serialize config to a text buffer (key=value lines).
+ * @return Number of bytes written (excluding NUL).
+ */
+int init_config_build_buffer(char *buf, int bufsz);

@@ -920,6 +920,53 @@ static void ensure_all_home_dirs(void) {
     }
 }
 
+/* Load /etc/init.conf from FAT32 if it exists (overrides cpio defaults) */
+static void load_fat32_init_conf(void) {
+    if (!g_fat32_mounted || !g_fat32_root) return;
+    struct vnode *etc_dir = NULL;
+    if (vfs_lookup(g_fat32_root, "etc", &etc_dir) != 0 || !etc_dir) return;
+    struct vnode *conf_vp = NULL;
+    if (vfs_lookup(etc_dir, "init.conf", &conf_vp) != 0 || !conf_vp) return;
+
+    int64_t sz = vfs_getsize(conf_vp);
+    if (sz <= 0 || sz > 4095) return;
+
+    char buf[4096];
+    int n = vfs_read_at(conf_vp, buf, (size_t)sz, 0);
+    if (n <= 0) return;
+    buf[n] = '\0';
+
+    /* Parse lines and override individual keys */
+    char line[128];
+    int llen = 0;
+    for (int i = 0; i <= n; i++) {
+        char c = (i < n) ? buf[i] : '\0';
+        if (c == '\n' || c == '\r' || c == '\0') {
+            line[llen] = '\0';
+            if (llen > 0) {
+                char *p = line;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p == '#' || *p == '\0') { llen = 0; continue; }
+                char *eq = p;
+                while (*eq && *eq != '=') eq++;
+                if (*eq == '=') {
+                    *eq = '\0';
+                    char *key = p;
+                    char *val = eq + 1;
+                    int kl = 0; while (key[kl]) kl++;
+                    while (kl > 0 && (key[kl-1] == ' ' || key[kl-1] == '\t')) key[--kl] = '\0';
+                    while (*val == ' ' || *val == '\t') val++;
+                    if (*key) init_config_set(key, val);
+                }
+            }
+            llen = 0;
+        } else {
+            if (llen < 127) line[llen++] = c;
+        }
+    }
+    uart_puts("[INITCFG] Loaded overrides from FAT32 /etc/init.conf\n");
+}
+
 /*
  * Extract argument N (1-based) from a command line string into buf[max].
  * Arg 0 is the command itself.  If is_rest is true, the last arg includes
@@ -1030,6 +1077,7 @@ void shell_fat32_mount(const char *cmdline) {
         g_fat32_cwd_path[0] = '/'; g_fat32_cwd_path[1] = '\0';
         vga_write("[OK] Using auto-mounted FAT32 volume.\n");
         ensure_all_home_dirs();
+        load_fat32_init_conf();
         return;
     }
     vga_write("Initializing ATA driver... ");
@@ -1051,6 +1099,7 @@ void shell_fat32_mount(const char *cmdline) {
     g_fat32_cwd_path[0] = '/'; g_fat32_cwd_path[1] = '\0';
     vga_write("[OK]\n");
     ensure_all_home_dirs();
+    load_fat32_init_conf();
 }
 
 /* --- umount --- */
@@ -1567,6 +1616,76 @@ void shell_fat32_chmod(const char *cmdline) {
     } else {
         vga_write("[ERROR] No inode for this vnode.\n");
     }
+}
+
+/* --- editinit: interactive editor for init.conf, saves to FAT32 --- */
+void shell_fat32_editinit(const char *cmdline) {
+    (void)cmdline;
+    if (!init_config_is_loaded()) {
+        vga_write("[ERROR] Init config not loaded.\n");
+        return;
+    }
+
+    vga_write("=== Edit Init Configuration ===\n");
+    vga_write("Press Enter to keep current value, or type a new one.\n\n");
+
+    int count = init_config_get_count();
+    for (int i = 0; i < count; i++) {
+        const char *key = NULL, *val = NULL;
+        if (init_config_get_entry(i, &key, &val) != 0) continue;
+
+        vga_write("  ");
+        vga_write(key);
+        vga_write(" [");
+        vga_write(val);
+        vga_write("]: ");
+
+        char newval[64];
+        int len = fat32_read_line(newval, 64);
+        if (len < 0) {  /* ESC pressed */
+            vga_write("[INFO] Aborted.\n");
+            return;
+        }
+        if (len > 0) {
+            init_config_set(key, newval);
+        }
+        /* len == 0 (just Enter) → keep old value */
+    }
+
+    /* Save to FAT32 disk if mounted */
+    if (!g_fat32_mounted || !g_fat32_root) {
+        vga_write("\n[WARNING] FAT32 not mounted — changes are in memory only.\n");
+        return;
+    }
+
+    /* Ensure /etc directory exists */
+    struct vnode *etc_dir = NULL;
+    if (vfs_lookup(g_fat32_root, "etc", &etc_dir) != 0 || !etc_dir) {
+        if (vfs_mkdir(g_fat32_root, "etc", &etc_dir) != 0 || !etc_dir) {
+            vga_write("\n[ERROR] Cannot create /etc on FAT32.\n");
+            return;
+        }
+    }
+
+    /* Remove old init.conf if it exists */
+    struct vnode *old_conf = NULL;
+    if (vfs_lookup(etc_dir, "init.conf", &old_conf) == 0 && old_conf) {
+        vfs_remove(etc_dir, "init.conf");
+    }
+
+    /* Create new init.conf */
+    struct vnode *conf_vp = NULL;
+    if (vfs_create(etc_dir, "init.conf", &conf_vp) != 0 || !conf_vp) {
+        vga_write("\n[ERROR] Cannot create init.conf on FAT32.\n");
+        return;
+    }
+
+    char buf[2048];
+    int len = init_config_build_buffer(buf, (int)sizeof(buf));
+    vfs_write_at(conf_vp, buf, (size_t)len, 0);
+
+    vga_write("\n[OK] Configuration saved to FAT32 /etc/init.conf\n");
+    vga_write("     Changes take effect on next boot.\n");
 }
 
 /* Keep the old demo function available */
@@ -2238,8 +2357,8 @@ void run_tomahawk_shell(void) {
     /* Check if user exists */
     p = emit_mov64(p, 7, userbuf);
     p = emit_syscall_only(p, 12); /* SYS_PASS_EXISTS */
-    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0;
-    *p++ = 0x75; uint8_t *reg_exists = p; *p++ = 0x00;
+    *p++ = 0x48; *p++ = 0x85; *p++ = 0xC0; /* test rax, rax */
+    *p++ = 0x0F; *p++ = 0x85; uint8_t *reg_exists = p; p += 4; /* JNE near */
     /* Prompt for password — uses SYS_READLINE_MASKED for '*' echo */
     p = emit_print(p, s_pass, s_pass_len);
     p = emit_mov64(p, 7, passbuf);   /* rdi = buffer */
@@ -2254,7 +2373,7 @@ void run_tomahawk_shell(void) {
     p = emit_syscall_only(p, 11); /* SYS_PASS_STORE */
     p = emit_print(p, s_reg_ok, s_reg_ok_len);
     *p++ = 0xE9; uint8_t *jloop9 = p; p += 4;
-    *reg_exists = (uint8_t)(p - reg_exists - 1);
+    { int32_t _o = (int32_t)(p - reg_exists - 4); reg_exists[0]=_o&0xFF; reg_exists[1]=(_o>>8)&0xFF; reg_exists[2]=(_o>>16)&0xFF; reg_exists[3]=(_o>>24)&0xFF; }
     p = emit_print(p, s_reg_exists, s_reg_exists_len);
     *p++ = 0xE9; uint8_t *jloop10 = p; p += 4;
     /* ESC cancel target for register (both username and password ESC land here) */

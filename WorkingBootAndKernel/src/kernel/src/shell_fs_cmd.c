@@ -866,6 +866,10 @@ int shell_fs_dispatch(const char *cmdline) {
         cmd_initconf(args);
         return 0;
     }
+    if (strcmp(cmd, "editinit") == 0) {
+        shell_fat32_editinit(args);
+        return 0;
+    }
 
     if (strcmp(cmd, "jobdemo") == 0) {
         run_job_control_demo();

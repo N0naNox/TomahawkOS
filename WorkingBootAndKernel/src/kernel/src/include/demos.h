@@ -52,6 +52,7 @@ void shell_fat32_cd(const char *cmdline);
 void shell_fat32_rename(const char *cmdline);
 void shell_fat32_chmod(const char *cmdline);
 void shell_fat32_touch(const char *cmdline);
+void shell_fat32_editinit(const char *cmdline);
 
 /* Home directory and CWD path helpers */
 const char *shell_fat32_get_cwd_path(void);

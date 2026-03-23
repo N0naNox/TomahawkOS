@@ -402,3 +402,49 @@ void init_config_dump(void) {
     vga_write(cfg_count == 1 ? " entry" : " entries");
     vga_write(" loaded ---\n");
 }
+
+int init_config_set(const char *key, const char *val) {
+    if (!key || !val) return -1;
+    /* Update existing entry */
+    for (int i = 0; i < cfg_count; i++) {
+        if (strcmp(cfg_table[i].key, key) == 0) {
+            safe_copy(cfg_table[i].val, val, INIT_CFG_VAL_MAX_LEN);
+            return 0;
+        }
+    }
+    /* Add new entry */
+    if (cfg_count >= INIT_CFG_MAX_ENTRIES) return -1;
+    safe_copy(cfg_table[cfg_count].key, key, INIT_CFG_KEY_MAX_LEN);
+    safe_copy(cfg_table[cfg_count].val, val, INIT_CFG_VAL_MAX_LEN);
+    cfg_count++;
+    cfg_loaded = 1;
+    return 0;
+}
+
+int init_config_get_count(void) {
+    return cfg_count;
+}
+
+int init_config_get_entry(int index, const char **key, const char **val) {
+    if (index < 0 || index >= cfg_count) return -1;
+    if (key) *key = cfg_table[index].key;
+    if (val) *val = cfg_table[index].val;
+    return 0;
+}
+
+int init_config_build_buffer(char *buf, int bufsz) {
+    int off = 0;
+    const char *hdr = "# TomahawkOS Init Configuration\n";
+    for (int i = 0; hdr[i] && off < bufsz - 1; i++)
+        buf[off++] = hdr[i];
+    for (int i = 0; i < cfg_count && off < bufsz - 4; i++) {
+        for (const char *s = cfg_table[i].key; *s && off < bufsz - 3; s++)
+            buf[off++] = *s;
+        buf[off++] = '=';
+        for (const char *s = cfg_table[i].val; *s && off < bufsz - 2; s++)
+            buf[off++] = *s;
+        buf[off++] = '\n';
+    }
+    buf[off] = '\0';
+    return off;
+}
