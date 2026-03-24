@@ -697,15 +697,15 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
         case SYS_PASS_DELETE: {
             /* arg1 = cmdline "userdel <username>"; only admins may do this */
             if (shell_current_uid < 0 || !password_store_is_admin(shell_current_uid)) {
-                uart_puts("[KERNEL] userdel: permission denied\n");
+                vga_write("[ERROR] Permission denied: admin only.\n");
                 return (uint64_t)(int64_t)-EPERM;
             }
             if (validate_user_string((const char *)arg1))
                 return (uint64_t)(int64_t)-EFAULT;
             const char *del_name = skip_to_arg1((const char*)arg1);
-            if (!del_name) return (uint64_t)(int64_t)-EINVAL;
+            if (!del_name) { vga_write("[ERROR] Usage: userdel <username>\n"); return (uint64_t)(int64_t)-EINVAL; }
             int del_uid = password_store_get_uid(del_name);
-            if (del_uid < 0) return (uint64_t)(int64_t)-ENOENT;
+            if (del_uid < 0) { vga_write("[ERROR] User not found: "); vga_write(del_name); vga_write("\n"); return (uint64_t)(int64_t)-ENOENT; }
             /* Copy username before deletion (for home dir cleanup) */
             char del_uname[32];
             int di = 0;
@@ -715,6 +715,11 @@ uint64_t syscall_handler_c(uint64_t syscall_num, uint64_t arg1, uint64_t arg2, u
             if (rc == 0) {
                 /* Delete the user's home directory */
                 shell_fat32_delete_home(del_uname);
+                vga_write("[OK] Deleted user: ");
+                vga_write(del_uname);
+                vga_write("\n");
+            } else {
+                vga_write("[ERROR] Failed to delete user.\n");
             }
             return (uint64_t)rc;
         }

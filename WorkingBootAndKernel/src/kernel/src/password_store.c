@@ -68,7 +68,7 @@ static int hash_compare(const uint8_t* h1, const uint8_t* h2) {
 
 /* Helper: find user by username, returns index or -1 if not found */
 static int find_user(const char* username) {
-    for (int i = 0; i < user_count; i++) {
+    for (int i = 0; i < MAX_USERS; i++) {
         if (user_db[i].used) {
             /* Simple string compare */
             const char* a = username;
