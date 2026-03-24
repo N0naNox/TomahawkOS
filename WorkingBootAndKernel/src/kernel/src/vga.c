@@ -14,6 +14,7 @@
 
 /* Framebuffer info (set by vga_init_fb) */
 static volatile uint32_t* fb_buffer = 0;
+static volatile uint32_t* fb_buffer_backup = 0;  /* corruption guard */
 static uint32_t fb_width = 1024;
 static uint32_t fb_height = 768;
 static uint32_t fb_pitch = 1024;
@@ -34,6 +35,7 @@ static uint8_t vga_fg = VGA_COLOR_LIGHT_GREY;
 
 void vga_init_fb(void* framebuffer, uint32_t width, uint32_t height, uint32_t pitch) {
 	fb_buffer = (volatile uint32_t*)framebuffer;
+	fb_buffer_backup = fb_buffer;
 	fb_width = width;
 	fb_height = height;
 	fb_pitch = pitch;
@@ -73,7 +75,14 @@ void vga_set_color(uint8_t bg, uint8_t fg) {
 
 void vga_clear(uint8_t bg, uint8_t fg) {
 	(void)bg; (void)fg;
-	if (!fb_buffer) return;
+	/* Guard against BSS corruption of fb_buffer */
+	if (!fb_buffer || fb_buffer != fb_buffer_backup) {
+		if (fb_buffer_backup) {
+			fb_buffer = fb_buffer_backup;  /* restore from backup */
+		} else {
+			return;
+		}
+	}
 	/* Clear framebuffer to black */
 	for (uint32_t i = 0; i < fb_height * fb_pitch; i++) {
 		fb_buffer[i] = 0x00000000;

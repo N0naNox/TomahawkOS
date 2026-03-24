@@ -311,14 +311,6 @@ static void cmd_write(const char *args) {
     }
 }
 
-/* ========== pwd ========== */
-
-static void cmd_pwd(const char *args) {
-    (void)args;
-    /* We don't track a current working directory yet, so always show "/" */
-    vga_write("/\n");
-}
-
 /* ========== tree (recursive directory listing) ========== */
 
 static void tree_recursive(struct vnode *vp, int depth) {
@@ -850,10 +842,6 @@ int shell_fs_dispatch(const char *cmdline) {
         cmd_write(args);
         return 0;
     }
-    if (strcmp(cmd, "pwd") == 0) {
-        cmd_pwd(args);
-        return 0;
-    }
     if (strcmp(cmd, "tree") == 0) {
         cmd_tree(args);
         return 0;
@@ -901,6 +889,10 @@ int shell_fs_dispatch(const char *cmdline) {
     }
     if (strcmp(cmd, "httpget") == 0) {
         cmd_httpget(args);
+        return 0;
+    }
+    if (strcmp(cmd, "wget") == 0) {
+        shell_fat32_wget(args);
         return 0;
     }
 

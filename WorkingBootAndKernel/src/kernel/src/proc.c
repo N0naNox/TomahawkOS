@@ -96,8 +96,15 @@ pcb_t* create_process(const char* name, void (*entry)(void)) {
 
     /* Initialize signal handling */
     signal_init(&p->signals);
-    p->parent = NULL;
     p->exit_code = 0;
+
+    /* Link to calling process as parent (if one exists) */
+    pcb_t* caller = get_current_process();
+    p->parent = caller;
+    if (caller) {
+        p->sibling_next = caller->children;
+        caller->children = p;
+    }
 
     /* Job control: new process is its own group leader by default */
     p->pgid = p->pid;

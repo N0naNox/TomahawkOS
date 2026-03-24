@@ -35,7 +35,8 @@ qemu-system-x86_64 \
 	-serial stdio \
 	-usb \
 	-vga none \
-	-net none \
+	-netdev user,id=n0,hostfwd=udp::4444-:4444 \
+	-device e1000,netdev=n0 \
 	-device VGA,xres=$XRES,yres=$YRES,vgamem_mb=64 \
 	-device isa-debug-exit,iobase=0xf4,iosize=0x04
 # fallback to legacy target

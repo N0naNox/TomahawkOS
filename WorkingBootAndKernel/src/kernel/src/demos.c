@@ -23,6 +23,10 @@
 #include "include/ata.h"
 #include "include/fat32.h"
 #include "include/password_store.h"
+#include "include/net_device.h"
+#include "include/net.h"
+#include "include/dns.h"
+#include "include/http.h"
 #include "include/tty.h"
 
 extern volatile int demo_stop_requested;
@@ -1667,6 +1671,83 @@ void shell_fat32_editinit(const char *cmdline) {
     vga_write("     Changes take effect on next boot.\n");
 }
 
+/* --- wget: download file via HTTP and save to FAT32 disk --- */
+void shell_fat32_wget(const char *cmdline) {
+    if (!g_fat32_mounted) {
+        vga_write("[ERROR] No FAT32 volume mounted.\n");
+        return;
+    }
+
+    /* Parse: wget <domain> <url-path> <filename> [port] */
+    char domain[128], urlpath[256], filename[64], portstr[16];
+    if (cmdline_get_arg(cmdline, 1, domain, (int)sizeof(domain), 0) <= 0) {
+        vga_write("usage: wget <domain> <url-path> <filename> [port]\n");
+        return;
+    }
+    if (cmdline_get_arg(cmdline, 2, urlpath, (int)sizeof(urlpath), 0) <= 0 ||
+        urlpath[0] != '/') {
+        vga_write("wget: url-path must start with '/'\n");
+        return;
+    }
+    if (cmdline_get_arg(cmdline, 3, filename, (int)sizeof(filename), 0) <= 0) {
+        vga_write("wget: missing filename\n");
+        return;
+    }
+    uint16_t port = 80;
+    if (cmdline_get_arg(cmdline, 4, portstr, (int)sizeof(portstr), 0) > 0) {
+        uint32_t p = 0;
+        for (int i = 0; portstr[i] >= '0' && portstr[i] <= '9'; i++)
+            p = p * 10 + (uint32_t)(portstr[i] - '0');
+        if (p > 0 && p <= 65535) port = (uint16_t)p;
+    }
+
+    /* Get NIC */
+    net_device_t *dev = net_device_get_by_name("eth0");
+    if (!dev) dev = net_device_get_by_name("lo");
+    if (!dev) { vga_write("wget: no NIC available\n"); return; }
+
+    vga_write("wget: http://");
+    vga_write(domain);
+    vga_write(urlpath);
+    vga_write(" -> ");
+    vga_write(filename);
+    vga_write("\n");
+
+    /* Fetch */
+    static char body[8192];
+    int rc = http_get(dev, domain, port, urlpath, body, sizeof(body));
+    if (rc == -1) { vga_write("wget: DNS resolution failed\n"); return; }
+    if (rc == -2) { vga_write("wget: TCP connect/send failed\n"); return; }
+    if (rc == -4) { vga_write("wget: empty or malformed response\n"); return; }
+
+    /* Remove old file if it exists, then create fresh */
+    struct vnode *vp = NULL;
+    if (vfs_lookup(g_fat32_cwd, filename, &vp) == 0 && vp) {
+        vfs_remove(g_fat32_cwd, filename);
+        vp = NULL;
+    }
+    if (vfs_create(g_fat32_cwd, filename, &vp) != 0 || !vp) {
+        vga_write("wget: cannot create file on disk\n");
+        return;
+    }
+
+    /* Write to FAT32 disk */
+    int len = 0;
+    while (body[len]) len++;
+    int wr = vfs_write_at(vp, body, (size_t)len, 0);
+    if (wr < 0) {
+        vga_write("wget: write error\n");
+    } else {
+        char num[16]; int_to_str(wr, num, 10);
+        vga_write("wget: saved ");
+        vga_write(num);
+        vga_write(" bytes to ");
+        vga_write(filename);
+        vga_write("\n");
+        if (rc == -3) vga_write("[wget: response was truncated]\n");
+    }
+}
+
 /* Keep the old demo function available */
 void run_fat32_demo(void) {
     shell_fat32_mount(NULL);
@@ -1793,47 +1874,46 @@ void run_tomahawk_shell(void) {
         "   | | (_) | | | | | | (_| | | | | (_| |\\ V  V /|   < \n"
         "   |_|\\___/|_| |_| |_|\\__,_|_| |_|\\__,_| \\_/\\_/ |_|\\_\\\n"
         "                                          Shell v1.0\n\n")
-    PLACE_STR(s_help, "Available commands:\n"
-        "  help      - Show this help message\n"
+    PLACE_STR(s_help, "Available commands:\n\n"
+        " Session:\n"
         "  login     - Log in with username and password\n"
-        "  register  - Create a new user account\n"
         "  logout    - Log out current user\n"
-        "  whoami    - Show current user\n"
+        "  register  - Create a new user account\n"
+        "  passwd    - Change your password\n"
         "  clear     - Clear the screen\n"
+        "  help      - Show this help message\n"
+        "  exit      - Shutdown the system\n\n"
+        " Files:\n"
         "  ls [path] - List directory contents\n"
         "  cat <file>- Display file contents\n"
+        "  tree [p]  - Show directory tree\n"
+        "  stat <p>  - Show file/dir info\n"
+        "  cd <path> - Change directory\n"
         "  mkdir <p> - Create a directory\n"
         "  touch <f> - Create an empty file\n"
         "  write <f> <text> - Write text to a file\n"
-        "  tree [p]  - Show directory tree\n"
-        "  stat <p>  - Show file/dir info\n"
-        "  pwd       - Print working directory\n"
-        "  initconf  - Show loaded init configuration\n"
-        "  editinit  - Edit init configuration (saved to disk)\n"
-        "  passwd    - Change your password\n"
-        "  userdel <user> - Delete a user account (admin only)\n"
-        "  promote <user> - Grant admin privileges (admin only)\n"
-        "  demote <user>  - Revoke admin privileges (admin only)\n"
+        "  rm <path> - Remove a file or directory\n"
+        "  mv <old> <new>  - Rename a file or directory\n"
+        "  chmod <mode> <f>- Change file permissions\n"
         "  mount     - Mount FAT32 volume from ATA disk\n"
-        "  umount    - Unmount FAT32 volume\n"
-        "  ls        - List current FAT32 directory\n"
-        "  cat       - Read a file (prompts for name)\n"
-        "  write     - Create/write a file (prompts for name)\n"
-        "  mkdir     - Create a directory (prompts for name)\n"
-        "  rm        - Remove a file or directory\n"
-        "  cd        - Change FAT32 directory\n"
+        "  umount    - Unmount FAT32 volume\n\n"
+        " Admin:\n"
+        "  userdel <user>  - Delete a user account\n"
+        "  promote <user>  - Grant admin privileges\n"
+        "  demote <user>   - Revoke admin privileges\n\n"
+        " Config:\n"
+        "  initconf  - Show loaded init configuration\n"
+        "  editinit  - Edit init configuration (saved to disk)\n\n"
+        " Network:\n"
+        "  netinfo   - Show NIC IP/MAC/gateway info\n"
+        "  dhcp      - Run DHCP on eth0\n"
+        "  udpsend <ip> <port> <msg> - Send a UDP datagram\n"
+        "  httpget <host> [/path] [port] - HTTP GET request\n"
+        "  wget <domain> <url-path> <filename> [port] - Download to disk\n\n"
+        " Debug:\n"
         "  tests     - Run kernel unit tests\n"
         "  forkwait  - Run fork-exec-wait demo\n"
-        "  jobdemo   - Run job control demo\n"
-        "  udpsend <ip> <port> <msg> - Send a UDP datagram over eth0\n"
-        "                 e.g.  udpsend 10.0.2.2 9 hello\n"
-        "                       udpsend 8.8.8.8 53 test\n"
-        "  netinfo   - Show all NIC IP/MAC/gateway info\n"
-        "  dhcp      - Re-run DHCP on eth0 (if unconfigured)\n"
-        "  httpget <domain> [/path] [port] - HTTP GET, prints response body\n"
-        "                 e.g.  httpget jsonplaceholder.typicode.com /todos/1\n"
-        "                       httpget 10.0.2.2 / 8080\n"
-        "  exit      - Shutdown the system\n\n")
+        "  jobdemo   - Run job control demo\n\n")
     /* Build prompts dynamically from init.cfg (hostname= and username=) */
     const char *_cfg_host = init_config_get("hostname");
     const char *_cfg_user = init_config_get("username");
@@ -1881,7 +1961,6 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_cmd_login, "login")
     PLACE_STR(s_cmd_register, "register")
     PLACE_STR(s_cmd_logout, "logout")
-    PLACE_STR(s_cmd_whoami, "whoami")
     PLACE_STR(s_cmd_clear, "clear")
     PLACE_STR(s_cmd_exit, "exit")
     PLACE_STR(s_cmd_tests, "tests")
@@ -2125,43 +2204,6 @@ void run_tomahawk_shell(void) {
     p = emit_syscall_only(p, 19); /* SYS_CLEAR_SCREEN */
     *p++ = 0xE9; uint8_t *jloop2 = p; p += 4;
     *not_clear = (uint8_t)(p - not_clear - 1);
-    
-    /* Check "whoami" */
-    p = emit_mov64(p, 12, cmdbuf);
-    p = emit_mov64(p, 13, s_cmd_whoami);
-    uint8_t *cmp_whoami = p;
-    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x04; *p++ = 0x24;
-    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x5D; *p++ = 0x00;
-    *p++ = 0x38; *p++ = 0xD8;
-    *p++ = 0x75; uint8_t *not_whoami = p; *p++ = 0x00;
-    *p++ = 0x84; *p++ = 0xC0;
-    *p++ = 0x74; uint8_t *is_whoami = p; *p++ = 0x00;
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC4;
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
-    *p++ = 0xEB;
-    int8_t cmp_whoami_off = (int8_t)(cmp_whoami - p - 1);
-    *p++ = (uint8_t)cmp_whoami_off;
-    *is_whoami = (uint8_t)(p - is_whoami - 1);
-    /* Get username and print */
-    p = emit_mov64(p, 7, namebuf);
-    p = emit_mov64(p, 6, 32);
-    p = emit_syscall_only(p, 18); /* SYS_GET_USERNAME */
-    /* Print username char by char */
-    p = emit_mov64(p, 13, namebuf);
-    uint8_t *whoami_loop = p;
-    *p++ = 0x41; *p++ = 0x8A; *p++ = 0x45; *p++ = 0x00;
-    *p++ = 0x84; *p++ = 0xC0;
-    *p++ = 0x74; uint8_t *whoami_done = p; *p++ = 0x00;
-    *p++ = 0x48; *p++ = 0x0F; *p++ = 0xB6; *p++ = 0xF8;
-    p = emit_syscall_only(p, 15);
-    *p++ = 0x49; *p++ = 0xFF; *p++ = 0xC5;
-    *p++ = 0xEB;
-    int8_t whoami_loop_off = (int8_t)(whoami_loop - p - 1);
-    *p++ = (uint8_t)whoami_loop_off;
-    *whoami_done = (uint8_t)(p - whoami_done - 1);
-    p = emit_print(p, s_nl, s_nl_len);
-    *p++ = 0xE9; uint8_t *jloop3 = p; p += 4;
-    *not_whoami = (uint8_t)(p - not_whoami - 1);
     
     /* Check "logout" */
     p = emit_mov64(p, 12, cmdbuf);
@@ -2711,7 +2753,6 @@ void run_tomahawk_shell(void) {
     
     PATCH_JLOOP_P1(jloop1);
     PATCH_JLOOP_P1(jloop2);
-    PATCH_JLOOP_P1(jloop3);
     PATCH_JLOOP_P1(jloop4);
     PATCH_JLOOP_P1(jloop5);
     
