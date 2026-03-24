@@ -1557,6 +1557,15 @@ void shell_fat32_rename(const char *cmdline) {
         if (fat32_read_line(new_name, 64) <= 0) return;
     }
 
+    /* Check that destination doesn't already exist */
+    struct vnode *existing = NULL;
+    if (vfs_lookup(g_fat32_cwd, new_name, &existing) == 0 && existing) {
+        vga_write("mv: '");
+        vga_write(new_name);
+        vga_write("' already exists\n");
+        return;
+    }
+
     /* Remove old entry and create new entry pointing to same vnode.
        FAT32 remove + create achieves a rename within the same directory. */
     rc = vfs_remove(g_fat32_cwd, old_name);
@@ -2020,7 +2029,7 @@ void run_tomahawk_shell(void) {
     PLACE_STR(s_cmd_mkdir, "mkdir")
     PLACE_STR(s_cmd_rm, "rm")
     PLACE_STR(s_cmd_cd, "cd")
-    PLACE_STR(s_cmd_rename, "rename")
+    PLACE_STR(s_cmd_rename, "mv")
     PLACE_STR(s_cmd_chmod, "chmod")
     PLACE_STR(s_cmd_touch, "touch")
     PLACE_STR(s_cmd_promote, "promote")
