@@ -1072,11 +1072,16 @@ void shell_fat32_mount(const char *cmdline) {
     }
     vga_write("[OK]\nMounting FAT32 volume... ");
     fat32_register();
-    g_fat32_root = fat32_mount(dev, 0);
-    if (!g_fat32_root) {
+    if (do_mount("/mnt/fat", "fat32", dev, 0) != 0) {
         vga_write("[ERROR] Mount failed.\n");
         return;
     }
+    struct vnode *mounted_root = NULL;
+    if (vfs_resolve_path("/mnt/fat", &mounted_root) != 0 || !mounted_root) {
+        vga_write("[ERROR] Mount registered but root not found.\n");
+        return;
+    }
+    g_fat32_root = mounted_root;
     g_fat32_cwd = g_fat32_root;
     g_fat32_mounted = 1;
     g_fat32_cwd_path[0] = '/'; g_fat32_cwd_path[1] = '\0';
@@ -1958,9 +1963,7 @@ void run_tomahawk_shell(void) {
         "  httpget <host> [/path] [port] - HTTP GET request\n"
         "  wget <domain> <url-path> <filename> [port] - Download to disk\n\n"
         " Debug:\n"
-        "  tests     - Run kernel unit tests\n"
-        "  forkwait  - Run fork-exec-wait demo\n"
-        "  jobdemo   - Run job control demo\n\n")
+        "  tests     - Run kernel unit tests\n\n")
     /* Build prompts dynamically from init.cfg (hostname= and username=) */
     const char *_cfg_host = init_config_get("hostname");
     const char *_cfg_user = init_config_get("username");
