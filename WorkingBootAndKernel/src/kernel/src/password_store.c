@@ -165,14 +165,20 @@ static void save_shadow(void) {
         buf[pos++] = '\n';
     }
 
-    /* Write to persistent FAT32 file */
+    /* Write to persistent FAT32 file.
+     * Remove and recreate so the file is truncated to the new size
+     * (FAT32 write_at only grows file_size, never shrinks it). */
     struct vnode *vp = NULL;
-    if (vfs_resolve_path(SHADOW_PATH, &vp) != 0 || !vp) {
-        /* File doesn't exist yet — create it */
-        struct vnode *parent = NULL;
-        if (vfs_resolve_path("/mnt/fat", &parent) == 0 && parent) {
-            vfs_create(parent, "SHADOW.DAT", &vp);
+    struct vnode *fat_dir = NULL;
+    if (vfs_resolve_path("/mnt/fat", &fat_dir) == 0 && fat_dir) {
+        /* Remove old file if it exists (truncates stale data) */
+        if (vfs_resolve_path(SHADOW_PATH, &vp) == 0 && vp) {
+            vfs_close(vp);
+            vp = NULL;
+            vfs_remove(fat_dir, "SHADOW.DAT");
         }
+        /* Create fresh file */
+        vfs_create(fat_dir, "SHADOW.DAT", &vp);
     }
     if (vp) {
         vfs_write_at(vp, buf, (size_t)pos, 0);
@@ -490,10 +496,15 @@ int password_store_delete(int uid) {
         return -1;
     }
     user_db[uid].used = 0;
+    user_db[uid].is_admin = 0;
     user_count--;
     uart_puts("[PASSWORD_STORE] Deleted user uid=");
     uart_puts(user_db[uid].username);
     uart_puts("\n");
+    /* Clear sensitive data from memory */
+    for (int i = 0; i < MAX_USERNAME_LEN; i++) user_db[uid].username[i] = 0;
+    for (int i = 0; i < SALT_SIZE; i++) user_db[uid].salt[i] = 0;
+    for (int i = 0; i < SHA256_HASH_SIZE; i++) user_db[uid].password_hash[i] = 0;
     save_shadow();
     return 0;
 }

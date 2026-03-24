@@ -1178,18 +1178,57 @@ void shell_fat32_cd_to_home(const char *username) {
 
 /* --- ls --- */
 void shell_fat32_ls(const char *cmdline) {
-    (void)cmdline;
     if (!g_fat32_mounted) {
         vga_write("[ERROR] No FAT32 volume mounted. Use 'mount' first.\n");
         return;
     }
+
+    /* Resolve target directory: use argument if given, else cwd */
+    struct vnode *target = g_fat32_cwd;
+    char path[256];
+    if (cmdline_get_arg(cmdline, 1, path, 256, 0) > 0) {
+        struct vnode *cur;
+        const char *p = path;
+        if (*p == '/') {
+            cur = g_fat32_root;
+            p++;
+        } else {
+            cur = g_fat32_cwd;
+        }
+        while (*p) {
+            while (*p == '/') p++;
+            if (*p == '\0') break;
+            char comp[64];
+            int ci = 0;
+            while (*p && *p != '/' && ci < 63) comp[ci++] = *p++;
+            comp[ci] = '\0';
+            if (comp[0] == '.' && comp[1] == '\0') continue;
+            struct vnode *child = NULL;
+            int rc = vfs_lookup(cur, comp, &child);
+            if (rc != 0 || !child) {
+                vga_write("ls: cannot access '");
+                vga_write(path);
+                vga_write("': No such file or directory\n");
+                return;
+            }
+            cur = child;
+        }
+        if (cur->v_type != VDIR) {
+            vga_write("ls: '");
+            vga_write(path);
+            vga_write("': Not a directory\n");
+            return;
+        }
+        target = cur;
+    }
+
     char num[16];
     struct vfs_dirent dent;
     uint64_t offset = 0;
     int count = 0;
     vga_write("Name               Type      Size\n");
     vga_write("------------------ --------- --------\n");
-    while (vfs_readdir(g_fat32_cwd, &dent, &offset) == 0) {
+    while (vfs_readdir(target, &dent, &offset) == 0) {
         int nlen = 0;
         while (dent.d_name[nlen]) nlen++;
         vga_write(dent.d_name);
