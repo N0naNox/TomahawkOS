@@ -1942,7 +1942,6 @@ void run_tomahawk_shell(void) {
         "  write <f> <text> - Write text to a file\n"
         "  rm <path> - Remove a file or directory\n"
         "  mv <old> <new>  - Rename a file or directory\n"
-        "  chmod <mode> <f>- Change file permissions\n"
         "  mount     - Mount FAT32 volume from ATA disk\n"
         "  umount    - Unmount FAT32 volume\n\n"
         " Admin:\n"
