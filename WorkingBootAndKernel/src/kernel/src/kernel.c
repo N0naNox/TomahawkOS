@@ -266,13 +266,69 @@ static void kernel_main_stage2(Boot_Info* boot_info)
 		                        boot_info->initrd_size);
 	}
 
-	/* Load and parse /etc/init.conf from initrd (or VFS fallback) */
+	/* Load and parse /etc/init.cfg from initrd (or VFS fallback) */
 	if (init_config_load() != 0) {
-		const char *cfg_err = "WARNING: Failed to load /etc/init.conf\n";
+		const char *cfg_err = "WARNING: Failed to load /etc/init.cfg\n";
 		for (int i = 0; cfg_err[i]; i++) outb(0x3F8, cfg_err[i]);
 	}
 
-	/* Copy parsed init.conf into VFS so ls/cat can see it */
+	/* Override config values from FAT32 /etc/init.cfg if it exists,
+	   or seed the file from cpio defaults on first boot. */
+	{
+		struct vnode *fat_root = NULL;
+		if (vfs_resolve_path("/mnt/fat", &fat_root) == 0 && fat_root) {
+			/* Ensure /etc directory exists on FAT32 */
+			struct vnode *fat_etc = NULL;
+			if (vfs_lookup(fat_root, "etc", &fat_etc) != 0 || !fat_etc)
+				vfs_mkdir(fat_root, "etc", &fat_etc);
+
+			if (fat_etc) {
+				struct vnode *fat_conf = NULL;
+				if (vfs_lookup(fat_etc, "init.cfg", &fat_conf) == 0 && fat_conf) {
+					/* File exists — load overrides */
+					int64_t sz = vfs_getsize(fat_conf);
+					if (sz > 0 && sz < 4096) {
+						char cbuf[4096];
+						int nr = vfs_read_at(fat_conf, cbuf, (size_t)sz, 0);
+						if (nr > 0) {
+							cbuf[nr] = '\0';
+							char ln[128]; int ll = 0;
+							for (int ci = 0; ci <= nr; ci++) {
+								char cc = (ci < nr) ? cbuf[ci] : '\0';
+								if (cc == '\n' || cc == '\r' || cc == '\0') {
+									ln[ll] = '\0';
+									if (ll > 0 && ln[0] != '#') {
+										char *eq = ln;
+										while (*eq && *eq != '=') eq++;
+										if (*eq == '=') {
+											*eq = '\0';
+											init_config_set(ln, eq + 1);
+										}
+									}
+									ll = 0;
+								} else {
+									if (ll < 127) ln[ll++] = cc;
+								}
+							}
+							uart_puts("[INITCFG] Loaded overrides from FAT32 /etc/init.cfg\n");
+						}
+					}
+				} else {
+					/* File does not exist — seed it from current (cpio) config */
+					struct vnode *new_conf = NULL;
+				if (vfs_create(fat_etc, "init.cfg", &new_conf) == 0 && new_conf) {
+						char sbuf[2048];
+						int slen = init_config_build_buffer(sbuf, (int)sizeof(sbuf));
+						if (slen > 0)
+							vfs_write_at(new_conf, sbuf, (size_t)slen, 0);
+						uart_puts("[INITCFG] Seeded FAT32 /etc/init.cfg from defaults\n");
+					}
+				}
+			}
+		}
+	}
+
+	/* Copy parsed init.cfg into VFS so ls/cat can see it */
 	init_config_create_vfs_copy();
 
 	/* --- TEMPORARY: Auto-run locking tests at boot for verification ---
@@ -445,7 +501,7 @@ void demo_esc_watcher(void) {
  * and then loops reaping any orphaned zombie children.
  */
 static void init_thread(void) {
-	/* Apply hostname from /etc/init.conf */
+	/* Apply hostname from /etc/init.cfg */
 	const char *hostname = init_config_get("hostname");
 	if (hostname) {
 		uart_puts("[INIT] hostname = ");

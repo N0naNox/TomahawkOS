@@ -3,7 +3,7 @@
  * @brief Init Configuration File Loader Implementation
  *
  * Primary source: scans the cpio newc initrd (registered via
- * init_config_set_initrd) to find ./etc/init.conf and parses it
+ * init_config_set_initrd) to find ./etc/init.cfg and parses it
  * line-by-line as key=value pairs.
  *
  * Fallback: if no initrd has been registered, looks up the file in the
@@ -244,7 +244,7 @@ int init_config_load(void) {
 
         uint32_t file_size = 0;
         const char *file_data = cpio_find_file(s_initrd_base, s_initrd_size,
-                                               "etc/init.conf", &file_size);
+                                               "etc/init.cfg", &file_size);
         if (file_data != NULL && file_size > 0) {
             uart_puts("[INITCFG] Found in initrd — parsing\n");
 
@@ -338,8 +338,8 @@ int init_config_create_vfs_copy(void) {
     }
 
     /* If the file already exists, skip */
-    if (vfs_lookup_ramfs(etc, "init.conf") != NULL) {
-        uart_puts("[INITCFG] /etc/init.conf already exists in VFS\n");
+    if (vfs_lookup_ramfs(etc, "init.cfg") != NULL) {
+        uart_puts("[INITCFG] /etc/init.cfg already exists in VFS\n");
         return 0;
     }
 
@@ -364,13 +364,13 @@ int init_config_create_vfs_copy(void) {
     buf[off] = '\0';
 
     /* Create the file */
-    struct vnode *f = vfs_create_file(etc, "init.conf");
+    struct vnode *f = vfs_create_file(etc, "init.cfg");
     if (!f) {
-        uart_puts("[INITCFG] Failed to create /etc/init.conf in VFS\n");
+        uart_puts("[INITCFG] Failed to create /etc/init.cfg in VFS\n");
         return -1;
     }
     vfs_write(f, buf, (size_t)off);
-    uart_puts("[INITCFG] Created /etc/init.conf in VFS (visible to ls/cat)\n");
+    uart_puts("[INITCFG] Created /etc/init.cfg in VFS (visible to ls/cat)\n");
     return 0;
 }
 

@@ -37,6 +37,15 @@ sudo mount -o loop "${IMG}" "${MOUNT_DIR}"
 sudo mkdir -p "${MOUNT_DIR}/docs/notes"
 sudo mkdir -p "${MOUNT_DIR}/src"
 sudo mkdir -p "${MOUNT_DIR}/empty_dir"
+sudo mkdir -p "${MOUNT_DIR}/etc"
+sudo mkdir -p "${MOUNT_DIR}/home"
+
+# Seed /etc from userland_root so init.conf and other config files exist
+if [ -d "userland_root/etc" ]; then
+    for f in userland_root/etc/*; do
+        [ -f "$f" ] && sudo cp "$f" "${MOUNT_DIR}/etc/"
+    done
+fi
 
 # Create test files with known content
 echo -n "Hello from TomahawkOS FAT32!" | sudo tee "${MOUNT_DIR}/hello.txt" > /dev/null

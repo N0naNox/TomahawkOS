@@ -23,6 +23,7 @@
 #include "include/ata.h"
 #include "include/fat32.h"
 #include "include/password_store.h"
+#include "include/tty.h"
 
 extern volatile int demo_stop_requested;
 extern void demo_esc_watcher(void);
@@ -920,13 +921,13 @@ static void ensure_all_home_dirs(void) {
     }
 }
 
-/* Load /etc/init.conf from FAT32 if it exists (overrides cpio defaults) */
+/* Load /etc/init.cfg from FAT32 if it exists (overrides cpio defaults) */
 static void load_fat32_init_conf(void) {
     if (!g_fat32_mounted || !g_fat32_root) return;
     struct vnode *etc_dir = NULL;
     if (vfs_lookup(g_fat32_root, "etc", &etc_dir) != 0 || !etc_dir) return;
     struct vnode *conf_vp = NULL;
-    if (vfs_lookup(etc_dir, "init.conf", &conf_vp) != 0 || !conf_vp) return;
+    if (vfs_lookup(etc_dir, "init.cfg", &conf_vp) != 0 || !conf_vp) return;
 
     int64_t sz = vfs_getsize(conf_vp);
     if (sz <= 0 || sz > 4095) return;
@@ -964,7 +965,7 @@ static void load_fat32_init_conf(void) {
             if (llen < 127) line[llen++] = c;
         }
     }
-    uart_puts("[INITCFG] Loaded overrides from FAT32 /etc/init.conf\n");
+    uart_puts("[INITCFG] Loaded overrides from FAT32 /etc/init.cfg\n");
 }
 
 /*
@@ -1032,32 +1033,10 @@ static char fat32_poll_char(void) {
     return c;
 }
 
-/* Read a line with echo; returns length, -1 on ESC */
+/* Read a line with full QoL editing (arrows, history, Home/End, Delete).
+   Delegates to tty_readline.  Returns length, -1 on ESC. */
 static int fat32_read_line(char *buf, int max) {
-    int pos = 0;
-    while (pos < max - 1) {
-        char c = fat32_poll_char();
-        if (c == 27) {
-            vga_putc('\n');
-            vga_write("[INFO] Cancelled.\n");
-            return -1;
-        }
-        if (c == '\n' || c == '\r') {
-            buf[pos] = '\0';
-            vga_putc('\n');
-            return pos;
-        }
-        if (c == '\b') {
-            if (pos > 0) { pos--; vga_write("\b \b"); }
-            continue;
-        }
-        if (c >= 32 && c < 127) {
-            buf[pos++] = c;
-            vga_putc(c);
-        }
-    }
-    buf[pos] = '\0';
-    return pos;
+    return tty_readline(tty_console(), buf, max);
 }
 
 /* --- mount --- */
@@ -1618,7 +1597,7 @@ void shell_fat32_chmod(const char *cmdline) {
     }
 }
 
-/* --- editinit: interactive editor for init.conf, saves to FAT32 --- */
+/* --- editinit: interactive editor for init.cfg, saves to FAT32 --- */
 void shell_fat32_editinit(const char *cmdline) {
     (void)cmdline;
     if (!init_config_is_loaded()) {
@@ -1667,16 +1646,16 @@ void shell_fat32_editinit(const char *cmdline) {
         }
     }
 
-    /* Remove old init.conf if it exists */
+    /* Remove old init.cfg if it exists */
     struct vnode *old_conf = NULL;
-    if (vfs_lookup(etc_dir, "init.conf", &old_conf) == 0 && old_conf) {
-        vfs_remove(etc_dir, "init.conf");
+    if (vfs_lookup(etc_dir, "init.cfg", &old_conf) == 0 && old_conf) {
+        vfs_remove(etc_dir, "init.cfg");
     }
 
-    /* Create new init.conf */
+    /* Create new init.cfg */
     struct vnode *conf_vp = NULL;
-    if (vfs_create(etc_dir, "init.conf", &conf_vp) != 0 || !conf_vp) {
-        vga_write("\n[ERROR] Cannot create init.conf on FAT32.\n");
+    if (vfs_create(etc_dir, "init.cfg", &conf_vp) != 0 || !conf_vp) {
+        vga_write("\n[ERROR] Cannot create init.cfg on FAT32.\n");
         return;
     }
 
@@ -1684,7 +1663,7 @@ void shell_fat32_editinit(const char *cmdline) {
     int len = init_config_build_buffer(buf, (int)sizeof(buf));
     vfs_write_at(conf_vp, buf, (size_t)len, 0);
 
-    vga_write("\n[OK] Configuration saved to FAT32 /etc/init.conf\n");
+    vga_write("\n[OK] Configuration saved to FAT32 /etc/init.cfg\n");
     vga_write("     Changes take effect on next boot.\n");
 }
 
@@ -1740,6 +1719,10 @@ static uint8_t *emit_print(uint8_t *p, uint64_t str_addr, uint64_t len) {
 void run_tomahawk_shell(void) {
     vga_write("=== Tomahawk Shell ===\n\n");
     vga_write("Starting interactive shell in Ring 3...\n\n");
+    
+    /* Disable interrupts early to prevent timer-driven context switches
+       from corrupting register state during page setup and JIT codegen. */
+    __asm__ volatile("cli");
     
     /* Memory layout - need more code space for shell */
     #define SHELL_CODE   0x40000000ULL
@@ -1826,6 +1809,7 @@ void run_tomahawk_shell(void) {
         "  stat <p>  - Show file/dir info\n"
         "  pwd       - Print working directory\n"
         "  initconf  - Show loaded init configuration\n"
+        "  editinit  - Edit init configuration (saved to disk)\n"
         "  passwd    - Change your password\n"
         "  userdel <user> - Delete a user account (admin only)\n"
         "  promote <user> - Grant admin privileges (admin only)\n"
@@ -1850,7 +1834,7 @@ void run_tomahawk_shell(void) {
         "                 e.g.  httpget jsonplaceholder.typicode.com /todos/1\n"
         "                       httpget 10.0.2.2 / 8080\n"
         "  exit      - Shutdown the system\n\n")
-    /* Build prompts dynamically from init.conf (hostname= and username=) */
+    /* Build prompts dynamically from init.cfg (hostname= and username=) */
     const char *_cfg_host = init_config_get("hostname");
     const char *_cfg_user = init_config_get("username");
     if (!_cfg_host || !_cfg_host[0]) _cfg_host = "tomahawk";
@@ -1935,10 +1919,6 @@ void run_tomahawk_shell(void) {
     uint64_t cwdbuf  = SHELL_BUF + 320; /* cwd path buffer */
     
     uart_puts("[SHELL] Generating shell code...\n");
-    
-    /* Disable interrupts during JIT code generation to prevent
-       timer-driven context switches from corrupting register state. */
-    __asm__ volatile("cli");
     
     /* Generate code */
     uint8_t *p = code_ptr;
