@@ -7,13 +7,68 @@
  */
 
 #include <stdint.h>
+#include <stddef.h>
 #include "include/vga.h"
+#include "include/font_8x16.h"
 #include "include/idt.h"
+#include "include/keyboard.h"
+#include "include/frame_alloc.h"
+#include "include/paging.h"
+#include "include/page_fault_handler.h"
+#include "include/string.h"
 #include <boot.h>
 #include <uart.h>
+#include "timer.h"
+#include "include/scheduler.h"
+#include "include/proc.h"
+#include "include/syscall_init.h"
+#include "include/syscall.h"
+#include "include/syscall_numbers.h"
+#include "include/gdt.h"
+#include "include/refcount.h"
+#include "include/signal.h"
+#include "include/tests.h"
+#include "include/demos.h"
+#include "include/password_store.h"
+#include "include/mount.h"
+#include "include/init_config.h"
+#include "include/sys_proc.h"
+#include "include/tty.h"
+#include "include/net.h"
+#include "include/net_test.h"
+#include "include/ata.h"
+#include "include/fat32.h"
+#include "include/vfs.h"
+
+/* Demo threads and helpers */
+static void demo_thread_a(void);
+static void demo_thread_b(void);
+void demo_esc_watcher(void);
+static void menu_thread(void);
+static void idle_thread(void);
+static void init_thread(void);
+static void keyboard_flush(void);
+
+typedef enum {
+	DEMO_ECHO = 1,
+	DEMO_SCHED = 2,
+	DEMO_COW_SIGNALS = 3,
+	DEMO_TESTS = 4,
+	DEMO_USERMODE = 5,
+	DEMO_VFS = 6,
+	DEMO_TOMAHAWK_SHELL = 7
+} demo_mode_t;
+
+static demo_mode_t select_demo(void);
+static void run_echo_demo(void);
+static void demo_busywait(void);
+
+volatile int demo_stop_requested = 0;
 
 /** Whether to draw a test pattern to video output. */
 #define DRAW_TEST_SCREEN 1
+
+#define KERNEL_VIRT_BASE 0xFFFFFFFF80000000ULL
 
 #define TEST_SCREEN_COL_NUM             4
 #define TEST_SCREEN_ROW_NUM             3
@@ -27,31 +82,561 @@
  * This is the kernel main entry point and its main program.
  */
 void kernel_main(Boot_Info* boot_info);
+static void kernel_main_stage2(Boot_Info* boot_info);
+
+/* Port I/O functions for VGA mode setting */
+static inline void outb(uint16_t port, uint8_t value) {
+	__asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline uint8_t inb(uint16_t port) {
+	uint8_t value;
+	__asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+	return value;
+}
+
+
+
+static uintptr_t g_kernel_pml4 = 0;
+
+extern uintptr_t kernel_start;  /* from linker script */
+extern uintptr_t kernel_end;
 
 
 
 
 
 /**
- * kernel_main
+ * @brief Write text to the framebuffer (for early boot messages before VGA init)
+ * Uses scale-1 (8x16) font since vga_init_fb hasn't run yet.
  */
+void write_text(volatile uint32_t* fb, uint32_t pitch, uint32_t width, uint32_t height,
+                const char* text, uint32_t x, uint32_t y)
+{
+	for (int i = 0; text[i]; i++) {
+		draw_char_8x16(fb, pitch, text[i], x + (i * 9), y, width, height);
+	}
+}
+
+
 void kernel_main(Boot_Info* boot_info)
 {
-	/* Initialize VGA first so we have immediate on-screen output */
-	vga_init();
-	vga_write("Kernel: VGA initialized.\n");
-
-	/* Initialize UART for serial logging */
 	uart_initialize();
-	uart_puts("Kernel: UART initialized.\n");
+	/* Send banner to serial */
+	const char* banner = "\n=== KERNEL RUNNING ===\n";
+	for (int i = 0; banner[i]; i++) {
+		outb(0x3F8, banner[i]);
+	}
+	
+	/* Initialize frame allocator from UEFI memory map */
+	frame_alloc_init(boot_info);
+	
+	/* Initialize reference counting for COW (track up to 2M frames = 8GB) */
+	refcount_init(2 * 1024 * 1024);
+	
+	/* Initialize paging with identity mapping (phys == virt) */
+	paging_init(0);
 
-	/* Install IDT (interrupts) */
+	gdt_init();
+	
+	/* Install IDT and register handlers BEFORE CR3 switch (before any page faults can occur) */
 	idt_install();
-	vga_write("Kernel: IDT installed.\n");
-	uart_puts("Kernel: IDT installed.\n");
+	
+	/* Set up kernel's PML4 and switch to it */
+	{
+		uintptr_t fb_paddr = (uintptr_t)boot_info->video_mode_info.framebuffer_pointer;
+		size_t    fb_size  = (size_t)boot_info->video_mode_info.framebuffer_size;
+		/* If bootloader didn't report size, estimate from resolution */
+		if (fb_size == 0 && boot_info->video_mode_info.horizontal_resolution > 0) {
+			fb_size = (size_t)boot_info->video_mode_info.pixels_per_scaline *
+			          (size_t)boot_info->video_mode_info.vertical_resolution * 4;
+		}
+		/* Minimum 4 MiB for safety */
+		if (fb_size < 4 * 1024 * 1024) fb_size = 4 * 1024 * 1024;
+		g_kernel_pml4 = paging_setup_kernel_pml4(fb_paddr, fb_size);
+	}
+	if (!g_kernel_pml4) {
+		const char* err = "ERROR: Failed to create kernel PML4\n";
+		for (int i = 0; err[i]; i++) {
+			outb(0x3F8, err[i]);
+		}
+		while (1) {
+			__asm__ volatile("pause");
+		}
+	}
 
-	/* Main idle loop - use HLT to save CPU until interrupts occur */
+	/* Ensure boot_info and its memory map remain accessible after CR3 switch */
+	const uintptr_t boot_info_phys = (uintptr_t)boot_info; /* identity assumed */
+	const size_t boot_info_size = sizeof(Boot_Info);
+	uintptr_t boot_info_start = boot_info_phys & ~(PAGE_SIZE - 1);
+	uintptr_t boot_info_end   = (boot_info_phys + boot_info_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	size_t boot_info_pages = (boot_info_end - boot_info_start) / PAGE_SIZE;
+	paging_map_range(g_kernel_pml4, boot_info_start, boot_info_start, boot_info_pages,
+	                PTE_PRESENT | PTE_RW | PTE_GLOBAL);
+
+	const uintptr_t mmap_phys = (uintptr_t)boot_info->memory_map;
+	const size_t mmap_size = (size_t)boot_info->memory_map_size;
+	uintptr_t mmap_start = mmap_phys & ~(PAGE_SIZE - 1);
+	uintptr_t mmap_end   = (mmap_phys + mmap_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	size_t mmap_pages = (mmap_end - mmap_start) / PAGE_SIZE;
+	paging_map_range(g_kernel_pml4, mmap_start, mmap_start, mmap_pages,
+	                PTE_PRESENT | PTE_RW | PTE_GLOBAL);
+	paging_load_cr3(g_kernel_pml4);
+	
+	const char* paging_ok = "Kernel PML4 loaded, CR3 switched.\n";
+	for (int i = 0; paging_ok[i]; i++) {
+		outb(0x3F8, paging_ok[i]);
+	}
+
+	/* If we are still executing from the low identity mapping, hop to the higher-half alias. */
+	uintptr_t here;
+	__asm__ volatile("lea (%%rip), %0" : "=r"(here));
+	if (here < KERNEL_VIRT_BASE) {
+		extern char stack_top;
+		uintptr_t new_rsp = ((uintptr_t)&stack_top) + KERNEL_VIRT_BASE;
+		__asm__ volatile("mov %0, %%rsp" :: "r"(new_rsp));
+
+		void (*stage2_hh)(Boot_Info*) = (void (*)(Boot_Info*))((uintptr_t)&kernel_main_stage2 + KERNEL_VIRT_BASE);
+		stage2_hh(boot_info);
+		while (1) { __asm__ volatile("hlt"); }
+	}
+
+	/* Already running higher-half; continue. */
+	kernel_main_stage2(boot_info);
+
+}
+
+static void kernel_main_stage2(Boot_Info* boot_info)
+{
+	/* Reload descriptor tables to their higher-half aliases before dropping identity mappings. */
+	gdt_init();
+	idt_reload_high();
+	
+	/* DON'T remove the kernel identity map yet - we need identity mapping 
+	 * for accessing physical frames returned by pfa_alloc_frame().
+	 * TODO: Implement a proper physical memory mapping window instead of full identity map. */
+
+	/* Initialize password store */
+	password_store_init();
+
+	/* Initialize filesystem and mount root */
+	if (fs_init_root() != 0) {
+		const char* fs_err = "ERROR: Failed to initialize root filesystem\n";
+		for (int i = 0; fs_err[i]; i++) {
+			outb(0x3F8, fs_err[i]);
+		}
+	}
+	
+	/* Mount system directories (/tmp, /dev) */
+	fs_mount_system_dirs();
+
+	/* Populate root filesystem with standard directories and files */
+	fs_populate_root();
+
+	/* Auto-mount FAT32 from ATA drive for persistent storage */
+	{
+		uart_puts("[BOOT] Initializing ATA for persistent storage...\n");
+		ata_init();
+		struct block_device *fat_dev = ata_get_block_device(0);
+		if (fat_dev) {
+			/* Create /mnt and /mnt/fat in ramfs */
+			struct vnode *root = vfs_get_root();
+			if (root) {
+				struct vnode *mnt_dir = vfs_mkdir_ramfs(root, "mnt");
+				if (mnt_dir) vfs_mkdir_ramfs(mnt_dir, "fat");
+			}
+			fat32_register();
+			if (do_mount("/mnt/fat", "fat32", fat_dev, 0) == 0) {
+				uart_puts("[BOOT] FAT32 auto-mounted at /mnt/fat\n");
+			} else {
+				uart_puts("[BOOT] WARNING: FAT32 auto-mount failed\n");
+			}
+		} else {
+			uart_puts("[BOOT] No ATA disk found, skipping FAT32 mount\n");
+		}
+	}
+
+	/* Now that FAT32 is mounted, load persisted users from /mnt/fat/SHADOW.DAT */
+	password_store_load_shadow();
+
+	/* Register the initrd memory region so init_config_load() can find
+	 * /etc/init.conf directly in the cpio archive without going through VFS. */
+	if (boot_info->initrd_base != 0 && boot_info->initrd_size > 0) {
+		init_config_set_initrd((void *)boot_info->initrd_base,
+		                        boot_info->initrd_size);
+	}
+
+	/* Load and parse /etc/init.cfg from initrd (or VFS fallback) */
+	if (init_config_load() != 0) {
+		const char *cfg_err = "WARNING: Failed to load /etc/init.cfg\n";
+		for (int i = 0; cfg_err[i]; i++) outb(0x3F8, cfg_err[i]);
+	}
+
+	/* Override config values from FAT32 /etc/init.cfg if it exists,
+	   or seed the file from cpio defaults on first boot. */
+	{
+		struct vnode *fat_root = NULL;
+		if (vfs_resolve_path("/mnt/fat", &fat_root) == 0 && fat_root) {
+			/* Ensure /etc directory exists on FAT32 */
+			struct vnode *fat_etc = NULL;
+			if (vfs_lookup(fat_root, "etc", &fat_etc) != 0 || !fat_etc)
+				vfs_mkdir(fat_root, "etc", &fat_etc);
+
+			if (fat_etc) {
+				struct vnode *fat_conf = NULL;
+				if (vfs_lookup(fat_etc, "init.cfg", &fat_conf) == 0 && fat_conf) {
+					/* File exists — load overrides */
+					int64_t sz = vfs_getsize(fat_conf);
+					if (sz > 0 && sz < 4096) {
+						char cbuf[4096];
+						int nr = vfs_read_at(fat_conf, cbuf, (size_t)sz, 0);
+						if (nr > 0) {
+							cbuf[nr] = '\0';
+							char ln[128]; int ll = 0;
+							for (int ci = 0; ci <= nr; ci++) {
+								char cc = (ci < nr) ? cbuf[ci] : '\0';
+								if (cc == '\n' || cc == '\r' || cc == '\0') {
+									ln[ll] = '\0';
+									if (ll > 0 && ln[0] != '#') {
+										char *eq = ln;
+										while (*eq && *eq != '=') eq++;
+										if (*eq == '=') {
+											*eq = '\0';
+											init_config_set(ln, eq + 1);
+										}
+									}
+									ll = 0;
+								} else {
+									if (ll < 127) ln[ll++] = cc;
+								}
+							}
+							uart_puts("[INITCFG] Loaded overrides from FAT32 /etc/init.cfg\n");
+						}
+					}
+				} else {
+					/* File does not exist — seed it from current (cpio) config */
+					struct vnode *new_conf = NULL;
+				if (vfs_create(fat_etc, "init.cfg", &new_conf) == 0 && new_conf) {
+						char sbuf[2048];
+						int slen = init_config_build_buffer(sbuf, (int)sizeof(sbuf));
+						if (slen > 0)
+							vfs_write_at(new_conf, sbuf, (size_t)slen, 0);
+						uart_puts("[INITCFG] Seeded FAT32 /etc/init.cfg from defaults\n");
+					}
+				}
+			}
+		}
+	}
+
+	/* Copy parsed init.cfg into VFS so ls/cat can see it */
+	init_config_create_vfs_copy();
+
+	/* --- TEMPORARY: Auto-run locking tests at boot for verification ---
+	 * Delete this block once all tests pass. */
+	run_kernel_tests();
+	/* ----------------------------------------------------------------- */
+
+	/* Print mount table for debugging */
+	mount_print_table();
+
+	/* Initialize user syscall machinery */
+	syscall_init();
+
+	if (boot_info->video_mode_info.framebuffer_pointer == NULL) {
+		const char* no_gfx = "ERROR: No framebuffer\n";
+		for (int i = 0; no_gfx[i]; i++) {
+			outb(0x3F8, no_gfx[i]);
+		}
+		while (1) {
+			__asm__ volatile("pause");
+		}
+	}
+	
+	/* Get framebuffer info */
+	volatile uint32_t* fb = (uint32_t*)boot_info->video_mode_info.framebuffer_pointer;
+	uint32_t width = boot_info->video_mode_info.horizontal_resolution;
+	uint32_t height = boot_info->video_mode_info.vertical_resolution;
+	uint32_t pitch = boot_info->video_mode_info.pixels_per_scaline;
+	
+	/* Clear screen to black */
+	for (uint32_t y = 0; y < height; y++) {
+		for (uint32_t x = 0; x < width; x++) {
+			fb[y * pitch + x] = 0x00000000;  /* Black */
+		}
+	}
+	
+	/* Draw "KERNEL RUNNING" with 8x16 bitmap font */
+	const char* text = "KERNEL RUNNING";
+	uint32_t start_x = 100;
+	uint32_t start_y = 100;
+	
+	write_text(fb, pitch, width, height, text, start_x, start_y);
+	
+	const char* done = "Framebuffer written\n";
+	for (int i = 0; done[i]; i++) {
+		outb(0x3F8, done[i]);
+	}
+
+	/* Initialize VGA with framebuffer */
+	vga_init_fb((void*)fb, width, height, pitch);
+	vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+	
+	/* Install PIT timer for preemptive scheduling */
+	timer_install();
+
+	keyboard_init();
+
+	/* Initialize TTY subsystem (console line discipline) */
+	tty_init();
+
+	/* Initialize network stack (netbuf pool, ARP cache, UDP layer, loopback) */
+	net_init();
+
+	/* Run loopback self-test (results printed to serial) */
+	net_test_loopback();
+
+	/* Run socket-layer self-test (results printed to serial) */
+	socket_self_test();
+
+	/* Run network interface abstraction self-test (results printed to serial) */
+	net_device_iface_test();
+
+	/* Run RX packet path self-test (ring enqueue/process/drop) */
+	net_rx_path_test();
+
+	/* Run TX packet path self-test (deferred ring enqueue/flush/drop) */
+	net_tx_path_test();
+
+	/* Run send()/recv() connected-socket self-test */
+	sock_send_recv_test();
+
+	scheduler_init();
+
+	/* Create essential threads */
+	create_process("init", init_thread);    /* PID 1 — applies config, spawns menu */
+	create_process("idle", idle_thread);    /* PID 2 — halts when nothing to run */
+
+	/* Enable interrupts and let the scheduler take over */
+	__asm__ volatile("sti");
+
+	/* Yield from bootstrap context into first scheduled thread */
+	while (1) {
+		__asm__ volatile("hlt");
+	}
+}
+
+static demo_mode_t select_demo(void) {
+	uart_puts("[SELECT] Waiting for demo selection (1-8)...\n");
+	while (1) {
+		char c = keyboard_getchar();
+		if (c == '1') {
+			uart_puts("[SELECT] Selected: 1\n");
+			return DEMO_ECHO;
+		} 
+		else if (c == '2') {
+			uart_puts("[SELECT] Selected: 2\n");
+			return DEMO_SCHED;
+		}
+		else if (c == '3') {
+			uart_puts("[SELECT] Selected: 3\n");
+			return DEMO_COW_SIGNALS;
+		}
+		else if (c == '4') {
+			uart_puts("[SELECT] Selected: 4\n");
+			return DEMO_TESTS;
+		}
+		else if (c == '5') {
+			uart_puts("[SELECT] Selected: 5\n");
+			return DEMO_USERMODE;
+		}
+		else if (c == '6') {
+			uart_puts("[SELECT] Selected: 6\n");
+			return DEMO_VFS;
+		}
+		else if (c == '7') {
+			uart_puts("[SELECT] Selected: 7\n");
+			return DEMO_TOMAHAWK_SHELL;
+		}
+		/* Silently ignore all other characters (including garbage) */
+	}
+}
+
+static void demo_busywait(void) {
+	for (volatile int i = 0; i < 2000000; i++) {
+		__asm__ volatile("pause");
+	}
+}
+
+static void demo_thread_a(void) {
+	while (!demo_stop_requested) {
+		uart_puts("[thread A] hello\n");
+		demo_busywait();
+	}
+	scheduler_thread_exit();
+}
+
+static void demo_thread_b(void) {
+	while (!demo_stop_requested) {
+		uart_puts("[thread B] hello\n");
+		demo_busywait();
+	}
+	scheduler_thread_exit();
+}
+
+void demo_esc_watcher(void) {
+	while (!demo_stop_requested) {
+		char c = keyboard_getchar();
+		if (c == 27) { /* ESC */
+			demo_stop_requested = 1;
+			break;
+		}
+		__asm__ volatile("pause");
+	}
+	scheduler_thread_exit();
+}
+
+/**
+ * PID 1 — init process.
+ * Applies boot-time configuration, spawns the interactive shell (menu),
+ * and then loops reaping any orphaned zombie children.
+ */
+static void init_thread(void) {
+	/* Apply hostname from /etc/init.cfg */
+	const char *hostname = init_config_get("hostname");
+	if (hostname) {
+		uart_puts("[INIT] hostname = ");
+		uart_puts(hostname);
+		uart_puts("\n");
+	}
+
+	/* Apply loglevel */
+	const char *loglevel = init_config_get("loglevel");
+	if (loglevel) {
+		uart_puts("[INIT] loglevel = ");
+		uart_puts(loglevel);
+		uart_puts("\n");
+	}
+
+	/* Spawn the interactive menu/shell */
+	create_process("menu", menu_thread);
+
+	/* Reap orphaned zombie children forever (init must not exit) */
+	for (;;) {
+		sys_wait(NULL);
+		__asm__ volatile("hlt");
+	}
+}
+
+static void idle_thread(void) {
 	for (;;) {
 		__asm__ volatile("hlt");
+	}
+}
+
+static void run_echo_demo(void) {
+	vga_write("Starting keyboard echo demo (ESC to stop)...\n");
+	uart_puts("Starting keyboard echo demo (ESC to stop)...\n");
+
+	while (1) {
+		char c = keyboard_getchar();
+		if (c == 27) { /* ESC */
+			break;
+		}
+		if (c) {
+			vga_putc(c);
+		}
+		__asm__ volatile("pause");
+	}
+}
+
+/* Helper to read a line of input from keyboard */
+static int read_line(char* buffer, int max_len) {
+	int pos = 0;
+	while (pos < max_len - 1) {
+		char c = keyboard_getchar();
+		if (!c) {
+			__asm__ volatile("pause");
+			continue;
+		}
+		if (c == '\n' || c == '\r') {
+			buffer[pos] = '\0';
+			vga_putc('\n');
+			return pos;
+		}
+		if (c == '\b' || c == 127) {
+			if (pos > 0) {
+				pos--;
+				vga_write("\b \b");
+			}
+			continue;
+		}
+		if (c == 27) { /* ESC */
+			return -1;
+		}
+		if (c >= 32 && c < 127) {
+			buffer[pos++] = c;
+			vga_putc(c);
+		}
+	}
+	buffer[pos] = '\0';
+	return pos;
+}
+
+/* Helper to read password (no echo) */
+static int read_password(char* buffer, int max_len) {
+	int pos = 0;
+	while (pos < max_len - 1) {
+		char c = keyboard_getchar();
+		if (!c) {
+			__asm__ volatile("pause");
+			continue;
+		}
+		if (c == '\n' || c == '\r') {
+			buffer[pos] = '\0';
+			vga_putc('\n');
+			return pos;
+		}
+		if (c == '\b' || c == 127) {
+			if (pos > 0) {
+				pos--;
+				vga_write("\b \b");
+			}
+			continue;
+		}
+		if (c == 27) { /* ESC */
+			return -1;
+		}
+		if (c >= 32 && c < 127) {
+			buffer[pos++] = c;
+			vga_putc('*'); /* Show asterisk instead of actual char */
+		}
+	}
+	buffer[pos] = '\0';
+	return pos;
+}
+
+static void menu_thread(void) {
+	/* Boot directly into Tomahawk Shell */
+	for (;;) {
+		keyboard_flush();
+		vga_clear(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+		run_tomahawk_shell();
+		keyboard_flush();
+	}
+}
+
+static void keyboard_flush(void) {
+	/* Hard reset the buffer to clear any corruption */
+	keyboard_reset_buffer();
+	
+	/* Flush remaining buffered characters silently */
+	for (int attempts = 0; attempts < 10; attempts++) {
+		while (keyboard_getchar()) {
+			/* Discard silently */
+		}
+		/* Small delay between attempts */
+		for (volatile int i = 0; i < 100000; i++) {
+			__asm__ volatile("pause");
+		}
 	}
 }

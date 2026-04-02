@@ -53,4 +53,18 @@ void uart_putchar(char a);
  */
 void uart_puts(const char* str);
 
+/**
+ * @brief UART puthex.
+ * Writes a hex value to the UART.
+ * @param val[in]    The value to write as hex.
+ */
+void uart_puthex(uint64_t val);
+
+/**
+ * @brief UART putu.
+ * Writes an unsigned 64-bit integer to the UART as decimal.
+ * @param value[in]    The unsigned integer to write.
+ */
+void uart_putu(uint64_t value);
+
 #endif

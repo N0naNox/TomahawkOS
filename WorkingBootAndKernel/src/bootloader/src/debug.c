@@ -1,8 +1,5 @@
 /**
- * @file debug.c
- * @author ajxs
- * @date Jul 2024
- * @brief Bootloader debug functions.
+ * Bootloader debug functions.
  */
 
 #include <efi.h>

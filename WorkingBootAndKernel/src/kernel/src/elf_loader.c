@@ -1,5 +1,6 @@
 #include "elf_loader.h"
 #include "paging.h"
+#include "frame_alloc.h"
 #include <uart.h>
 #include <stdint.h>
 

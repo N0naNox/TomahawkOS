@@ -49,7 +49,7 @@ hal_outw_asm:
 hal_inl_asm:
     mov dx, di
     in eax, dx
-    movzx rax, al
+    ; in eax, dx already zero-extends into rax on x86-64
     ret
 
 ; void hal_outl_asm(uint16_t port, uint32_t value)
@@ -57,4 +57,28 @@ hal_outl_asm:
     mov dx, di
     mov eax, esi
     out dx, eax
+    ret
+
+; void hal_insw_asm(uint16_t port, void *buffer, uint32_t count)
+; Reads 'count' 16-bit words from 'port' into 'buffer'.
+; SysV ABI: port=rdi, buffer=rsi, count=rdx
+; rep insw needs: dx=port, rdi=dest, rcx=count
+global hal_insw_asm
+hal_insw_asm:
+    mov rcx, rdx        ; count -> rcx  (must be BEFORE dx is overwritten)
+    mov rdx, rdi        ; port  -> rdx  (only low 16 bits matter)
+    mov rdi, rsi        ; buffer -> rdi (destination for rep insw)
+    rep insw
+    ret
+
+; void hal_outsw_asm(uint16_t port, const void *buffer, uint32_t count)
+; Writes 'count' 16-bit words from 'buffer' to 'port'.
+; SysV ABI: port=rdi, buffer=rsi, count=rdx
+; rep outsw needs: dx=port, rsi=src, rcx=count
+global hal_outsw_asm
+hal_outsw_asm:
+    mov rcx, rdx        ; count -> rcx
+    mov rdx, rdi        ; port  -> rdx
+    ; rsi already holds buffer (source for rep outsw)
+    rep outsw
     ret
