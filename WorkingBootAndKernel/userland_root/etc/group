@@ -1,6 +1,0 @@
-# /etc/group - TomahawkOS group database
-# Format: groupname:x:gid:members
-#
-root:x:0:admin
-users:x:100:
-nogroup:x:65534:guest

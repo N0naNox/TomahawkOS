@@ -1,0 +1,3 @@
+# /proc - Process information pseudo-filesystem
+# Future: /proc/[pid]/, /proc/meminfo, /proc/cpuinfo, etc.
+# Will be implemented as a procfs virtual filesystem.
