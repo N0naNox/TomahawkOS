@@ -1,8 +1,5 @@
 /**
- * @file loader.c
- * @author ajxs
- * @date Aug 2019
- * @brief Functionality for loading the Kernel executable.
+ * Functionality for loading the Kernel executable.
  * Contains functionality for loading the Kernel ELF executable.
  */
 

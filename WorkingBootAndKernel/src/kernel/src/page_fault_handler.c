@@ -1,7 +1,10 @@
 #include "page_fault_handler.h"
+#include "include/panic.h"
 #include <uart.h>
 #include <stdint.h>
 #include "paging.h"
+#include "frame_alloc.h"
+#include "refcount.h"
 
 /*
 Error code bits:
@@ -12,44 +15,51 @@ bit 3: RSVD = reserved bits overwritten
 bit 4: I/D = instruction fetch
 */
 
-static void decode_error(uint64_t code)
+int page_fault_handler(uint64_t error_code, uint64_t faulting_address, regs_t *regs)
 {
-    uart_puts("  Present:      "); uart_putu(code & 1); uart_putchar('\n');
-    uart_puts("  Write:        "); uart_putu((code >> 1) & 1); uart_putchar('\n');
-    uart_puts("  User:         "); uart_putu((code >> 2) & 1); uart_putchar('\n');
-    uart_puts("  Reserved bit: "); uart_putu((code >> 3) & 1); uart_putchar('\n');
-    uart_puts("  Instr fetch:  "); uart_putu((code >> 4) & 1); uart_putchar('\n');
-}
+    uart_puts("#PF cr2=0x");
+    uart_puthex(faulting_address);
+    uart_puts(" err=0x");
+    uart_puthex(error_code);
+    uart_puts("\n");
 
-int page_fault_handler(uint64_t error_code, uint64_t faulting_address)
-{
-    uart_puts("\n===== PAGE FAULT =====\n");
-    uart_puts("Faulting address: 0x"); uart_puthex(faulting_address); uart_putchar('\n');
-    uart_puts("Error code:       0x"); uart_puthex(error_code); uart_putchar('\n');
+    /* Check if this is a write fault on a present page (potential COW) */
+    if ((error_code & PF_CAUSE_PRESENT) && (error_code & PF_CAUSE_WRITE)) {
+        uintptr_t pml4_phys = paging_get_current_cr3();
+        uint64_t flags = paging_get_flags(pml4_phys, faulting_address);
+        
+        if (flags & PTE_COW) {
+            uart_puts("COW page detected - handling copy-on-write...\n");
+            int r = paging_handle_cow_fault(pml4_phys, faulting_address);
+            
+            if (r == 0) {
+                uart_puts("COW fault resolved successfully.\n");
+                return 0;
+            }
+            
+            kernel_panic("COW fault handler failed", regs, faulting_address);
+        }
+        
+        kernel_panic("Protection fault (write to non-COW page)", regs, faulting_address);
+    }
 
-    decode_error(error_code);
-
-    // If the page was not present – handle demand paging
+    /* Page not present — handle demand paging */
     if ((error_code & PF_CAUSE_PRESENT) == 0)
     {
-        uart_puts("Page not present → invoking handler...\n");
         int r = page_not_present_handler(faulting_address);
 
         if (r == 0)
         {
             uart_puts("Page fault resolved.\n");
-            return; // continue execution
+            return 0;
         }
 
-        uart_puts("page_not_present_handler FAILED!\n");
-    }
-    else
-    {
-        uart_puts("Protection fault! (Present=1)\n");
+        kernel_panic("Page not present — handler failed", regs, faulting_address);
     }
 
-    uart_puts("FATAL: System halted.\n");
-    while (1) { __asm__("hlt"); }
+    /* Protection fault that isn't a write-on-present (e.g. read of supervisor page) */
+    kernel_panic("Protection fault", regs, faulting_address);
+    return -1;  /* unreachable */
 }
 
 
@@ -57,6 +67,14 @@ int page_not_present_handler(uint64_t faulting_address)
 {
     // align to 4 KiB page
     uint64_t page_addr = faulting_address & ~0xFFFULL;
+
+    /* Reject obviously invalid addresses (e.g. -1 from error returns) */
+    if (faulting_address == 0 || faulting_address >= 0xFFFFFFFF80000000ULL) {
+        uart_puts("page_not_present: rejecting bad address 0x");
+        uart_puthex(faulting_address);
+        uart_puts("\n");
+        return -1;
+    }
 
     uintptr_t phys = pfa_alloc_frame();
     if (!phys)

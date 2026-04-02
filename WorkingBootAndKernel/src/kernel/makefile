@@ -1,14 +1,3 @@
-#####################################################################
-#  Copyright (c) 2019, AJXS.
-#  This program is free software; you can redistribute it and/or modify it
-#  under the terms of the GNU General Public License as published by the
-#  Free Software Foundation; either version 3 of the License, or
-#  (at your option) any later version.
-#
-#  Authors:
-#     Anthony <ajxs [at] panoptic.online>
-#####################################################################
-
 .POSIX:
 .DELETE_ON_ERROR:
 MAKEFLAGS += --warn-undefined-variables
@@ -17,7 +6,9 @@ MAKEFLAGS += --no-builtin-rules
 ARCH := x86_64
 CC   := ${ARCH}-elf-gcc
 
-SRC_DIR := src
+BUILD_DIR := build
+OBJ_DIR   := ${BUILD_DIR}
+SRC_DIR   := src
 
 INCLUDE_DIRS := ${SRC_DIR}/include
 INCLUDE_FLAG := ${foreach d, ${INCLUDE_DIRS}, -I$d}
@@ -36,36 +27,85 @@ LDFLAGS :=          \
 	-ffreestanding    \
 	-O2               \
 	-nostdlib         \
-	-z max-page-size=0x1000
+	-z max-page-size=0x1000 \
+	-L/usr/local/cross/lib/gcc/x86_64-elf/13.2.0 \
+	-L/usr/local/x86_64-elf/lib/gcc/x86_64-elf/13.2.0
 
 LIBS := -lgcc
 
 
 AS_SOURCES :=
-NASM_SOURCES := ${SRC_DIR}/hal_port_io_asm.asm ${SRC_DIR}/idt_asm.asm
+
+NASM_SOURCES := ${SRC_DIR}/entry.asm \
+	${SRC_DIR}/hal_port_io_asm.asm \
+	${SRC_DIR}/idt_asm.asm \
+	${SRC_DIR}/switch.asm \
+	${SRC_DIR}/syscall_entry.asm \
+	${SRC_DIR}/gdt_asm.asm
 
 C_SOURCES  :=              \
-	${SRC_DIR}/idt.c         \
 	${SRC_DIR}/hal_port_io.c \
+	${SRC_DIR}/idt.c         \
+	${SRC_DIR}/keyboard.c    \
 	${SRC_DIR}/kernel.c      \
-	${SRC_DIR}/vga.c         \
-	${SRC_DIR}/string.c      \
 	${SRC_DIR}/uart.c        \
+	${SRC_DIR}/frame_alloc.c \
 	${SRC_DIR}/paging.c      \
 	${SRC_DIR}/page_fault_handler.c \
 	${SRC_DIR}/elf_loader.c \
 	${SRC_DIR}/mm.c        \
 	${SRC_DIR}/page_fault_handler_mm.c \
 	${SRC_DIR}/elf_loader_mm.c     \
+	${SRC_DIR}/timer.c   \
+	${SRC_DIR}/proc.c   \
+	${SRC_DIR}/scheduler.c   \
+	${SRC_DIR}/string.c   \
+	${SRC_DIR}/vga.c	\
+	${SRC_DIR}/syscall_init.c \
+	${SRC_DIR}/syscall.c   \
+	${SRC_DIR}/gdt.c \
+	${SRC_DIR}/refcount.c \
+	${SRC_DIR}/signal.c \
+	${SRC_DIR}/tests.c \
+	${SRC_DIR}/demos.c \
+	${SRC_DIR}/sys_proc.c \
+	${SRC_DIR}/vfs.c \
+	${SRC_DIR}/password_store.c \
+	${SRC_DIR}/block_device.c \
+	${SRC_DIR}/mount.c \
+	${SRC_DIR}/shell_fs_cmd.c \
+	${SRC_DIR}/init_config.c \
+	${SRC_DIR}/spinlock.c \
+	${SRC_DIR}/ata.c \
+	${SRC_DIR}/fat32.c \
+	${SRC_DIR}/tty.c \
+	${SRC_DIR}/net.c \
+	${SRC_DIR}/ethernet.c \
+	${SRC_DIR}/arp.c \
+	${SRC_DIR}/ipv4.c \
+	${SRC_DIR}/icmp.c \
+	${SRC_DIR}/udp.c \
+	${SRC_DIR}/loopback.c \
+	${SRC_DIR}/net_test.c \
+	${SRC_DIR}/net_rx.c \
+	${SRC_DIR}/net_tx.c \
+	${SRC_DIR}/socket.c \
+	${SRC_DIR}/e1000.c \
+	${SRC_DIR}/dhcp.c \
+	${SRC_DIR}/tcp.c \
+	${SRC_DIR}/dns.c \
+	${SRC_DIR}/http.c \
+	${SRC_DIR}/panic.c \
+	${SRC_DIR}/fd.c \
+	${SRC_DIR}/pipe.c
 
-AS_OBJECTS  := ${AS_SOURCES:.S=.as.o}
-NASM_OBJECTS := ${NASM_SOURCES:.asm=.o}
-C_OBJECTS   := ${C_SOURCES:.c=.o}
+AS_OBJECTS   := $(patsubst ${SRC_DIR}/%.S,${OBJ_DIR}/%.as.o,${AS_SOURCES})
+NASM_OBJECTS := $(patsubst ${SRC_DIR}/%.asm,${OBJ_DIR}/%.o,${NASM_SOURCES})
+C_OBJECTS    := $(patsubst ${SRC_DIR}/%.c,${OBJ_DIR}/%.o,${C_SOURCES})
 
 OBJECTS := ${AS_OBJECTS} ${NASM_OBJECTS} ${C_OBJECTS}
 
 
-BUILD_DIR  := build
 BINARY     := ${BUILD_DIR}/kernel.elf
 
 
@@ -76,14 +116,14 @@ all: ${BINARY}
 ${BINARY}: ${BUILD_DIR} ${OBJECTS}
 	${CC} -T ${SRC_DIR}/kernel.ld -g3 -o ${BINARY} ${LDFLAGS} ${OBJECTS} ${LIBS}
 
-%.as.o: %.S
+${OBJ_DIR}/%.as.o: ${SRC_DIR}/%.S | ${BUILD_DIR}
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}
 
 
-%.o: %.c
+${OBJ_DIR}/%.o: ${SRC_DIR}/%.c | ${BUILD_DIR}
 	${CC} ${INCLUDE_FLAG} -g -c $< -o $@ ${CFLAGS}
 
-%.o: %.asm
+${OBJ_DIR}/%.o: ${SRC_DIR}/%.asm | ${BUILD_DIR}
 	nasm -f elf64 $< -o $@
 
 ${BUILD_DIR}:

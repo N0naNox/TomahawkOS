@@ -1,0 +1,43 @@
+#!/bin/bash
+# Full clean build + run.
+#
+# Usage:  bash rerun [resolution]
+#   resolution: 1080 | 1440 | 4k | 768  (default: 1080)
+
+set -e
+
+# Parse resolution argument
+RES="${1:-1080}"
+case "$RES" in
+    768)  XRES=1024  YRES=768  ;;
+    1080) XRES=1920  YRES=1080 ;;
+    1440) XRES=2560  YRES=1440 ;;
+    4k|4K|2160) XRES=3840 YRES=2160 ;;
+    *)    echo "Unknown resolution: $RES (use 768, 1080, 1440, 4k)"; exit 1 ;;
+esac
+echo "[RERUN] Resolution: ${XRES}x${YRES}"
+
+make clean -C src
+make -C src all
+
+# Regenerate FAT32 test image if missing
+if [ ! -f ./build/fat32test.img ]; then
+    echo "[RUN] fat32test.img missing, regenerating..."
+    sudo bash create_fat32_test.sh
+fi
+
+qemu-system-x86_64 \
+	-no-reboot -no-shutdown \
+	-bios OVMF.fd \
+	-drive if=none,id=uas-disk1,file=./build/kernel.img,format=raw \
+	-device usb-storage,drive=uas-disk1 \
+	-drive file=./build/fat32test.img,format=raw,if=ide,index=0,media=disk \
+	-serial stdio \
+	-usb \
+	-vga none \
+	-netdev user,id=n0,hostfwd=udp::4444-:4444 \
+	-device e1000,netdev=n0 \
+	-device VGA,xres=$XRES,yres=$YRES,vgamem_mb=64 \
+	-device isa-debug-exit,iobase=0xf4,iosize=0x04
+# fallback to legacy target
+# make -C src emu

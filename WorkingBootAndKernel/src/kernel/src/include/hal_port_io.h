@@ -23,6 +23,10 @@ void     hal_outw(uint16_t port, uint16_t value);
 uint32_t hal_inl(uint16_t port);
 void     hal_outl(uint16_t port, uint32_t value);
 
+/* Bulk 16-bit transfers (used by ATA PIO) */
+void hal_insw(uint16_t port, void *buffer, uint32_t count);
+void hal_outsw(uint16_t port, const void *buffer, uint32_t count);
+
 /* Assembly primitives (implemented in hal_port_io.asm)
  * The asm symbols have `_asm` suffix and are kept internal.
  */
@@ -32,5 +36,7 @@ extern uint16_t hal_inw_asm(uint16_t port);
 extern void     hal_outw_asm(uint16_t port, uint16_t value);
 extern uint32_t hal_inl_asm(uint16_t port);
 extern void     hal_outl_asm(uint16_t port, uint32_t value);
+extern void     hal_insw_asm(uint16_t port, void *buffer, uint32_t count);
+extern void     hal_outsw_asm(uint16_t port, const void *buffer, uint32_t count);
 
 #endif /* HAL_PORT_IO_H */

@@ -24,10 +24,11 @@ typedef struct s_memory_region_desc {
 } Memory_Map_Descriptor;
 
 typedef struct s_boot_video_info {
-	uint32_t* framebuffer_pointer;
+	void* framebuffer_pointer;
 	uint32_t horizontal_resolution;
 	uint32_t vertical_resolution;
 	uint32_t pixels_per_scaline;
+	uint64_t framebuffer_size;   /* total bytes: width * height * 4, rounded up */
 } Kernel_Boot_Video_Mode_Info;
 
 /**
@@ -36,9 +37,13 @@ typedef struct s_boot_video_info {
  */
 typedef struct s_boot_info {
 	Memory_Map_Descriptor* memory_map;
-	uint64_t mmap_size;
-	uint64_t mmap_descriptor_size;
+	uint64_t memory_map_size;
+	uint64_t memory_map_descriptor_size;
 	Kernel_Boot_Video_Mode_Info video_mode_info;
+	/** Physical address of the loaded initrd.img cpio archive (0 if absent). */
+	uintptr_t initrd_base;
+	/** Size in bytes of the loaded initrd (0 if absent). */
+	uint64_t initrd_size;
 } Boot_Info;
 
 #endif

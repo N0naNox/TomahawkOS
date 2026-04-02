@@ -1,0 +1,664 @@
+#include "proc.h"
+#include "string.h"
+#include "mm.h"
+#include "signal.h"
+#include "paging.h"
+#include <stdint.h>
+#include "include/scheduler.h"
+#include "include/elf_loader.h"
+#include "include/vfs.h"
+#include "include/frame_alloc.h"
+#include "include/fd.h"
+#include <uart.h>
+#include "include/errno.h"
+#include "include/vnode.h"
+
+/* Kernel stack size per thread */
+#define KERNEL_STACK_SIZE (16 * 1024)
+
+/* Tiny bump allocator for TCBs and stacks */
+#define KMALLOC_REGION_SIZE (1024 * 1024)
+static uint8_t kmalloc_region[KMALLOC_REGION_SIZE];
+static uintptr_t kmalloc_ptr = (uintptr_t)kmalloc_region;
+static uintptr_t kmalloc_end = (uintptr_t)kmalloc_region + KMALLOC_REGION_SIZE;
+
+static void* kmalloc(size_t size, size_t align) {
+    if (size == 0) return NULL;
+    uintptr_t ptr = (kmalloc_ptr + (align - 1)) & ~(align - 1);
+    if (ptr + size > kmalloc_end) return NULL;
+    kmalloc_ptr = ptr + size;
+    return (void*)ptr;
+}
+
+static void* zalloc(size_t size) {
+    void* p = kmalloc(size, 16);
+    if (p) memset(p, 0, size);
+    return p;
+}
+
+static uint64_t next_pid = 1;
+static uint64_t next_tid = 1;
+
+/* Global process list for signal delivery */
+static pcb_t* process_list = NULL;
+
+/* Allocate kernel stack (top pointer) */
+void* alloc_kernel_stack(void) {
+    void* stk = kmalloc(KERNEL_STACK_SIZE, 16);
+    if (!stk) return NULL;
+    uintptr_t top = ((uintptr_t)stk + KERNEL_STACK_SIZE) & ~0xFULL;
+    return (void*)top;
+}
+
+/* Create a thread (minimal, no scheduling) */
+tcb_t* create_thread(pcb_t* proc, void (*entry)(void)) {
+    tcb_t* t = (tcb_t*) zalloc(sizeof(tcb_t));
+    if (!t) return NULL;
+
+    t->tid = next_tid++;
+    t->state = THREAD_READY;
+    t->parent = proc;
+
+    t->kernel_stack = alloc_kernel_stack();
+
+    /* Initialize context */
+    memset(&t->context, 0, sizeof(cpu_context_t));
+    t->context.rip = (uint64_t)entry;
+
+    uint64_t* stack_ptr = (uint64_t*)t->kernel_stack;
+    stack_ptr--;
+    *stack_ptr = 0;
+    t->context.rsp = (uint64_t)stack_ptr;
+    t->context.rbp = t->context.rsp;
+
+    /* Link to process thread list */
+    if (proc) {
+        t->next = proc->threads;
+        proc->threads = t;
+    }
+
+    /* Add to scheduler ready queue */
+    scheduler_add_thread(t);
+
+    return t;
+}
+
+/* Create a process (minimal) */
+pcb_t* create_process(const char* name, void (*entry)(void)) {
+    (void)name;
+
+    pcb_t* p = (pcb_t*) zalloc(sizeof(pcb_t));
+    if (!p) return NULL;
+    p->pid = next_pid++;
+
+    /* Address space */
+    p->mm = mm_create();
+
+    /* Initialize signal handling */
+    signal_init(&p->signals);
+    p->exit_code = 0;
+
+    /* Link to calling process as parent (if one exists) */
+    pcb_t* caller = get_current_process();
+    p->parent = caller;
+    if (caller) {
+        p->sibling_next = caller->children;
+        caller->children = p;
+    }
+
+    /* Job control: new process is its own group leader by default */
+    p->pgid = p->pid;
+    p->sid  = p->pid;
+    p->is_stopped = 0;
+
+    /* Main thread */
+    p->main_thread = create_thread(p, entry);
+    p->threads = p->main_thread;
+    p->next = NULL;
+
+    /* Add to global process list */
+    p->next = process_list;
+    process_list = p;
+
+    /* Open stdin/stdout/stderr on console TTY */
+    fd_init_stdio(p);
+
+    return p;
+}
+
+/* Get current process (from current thread) */
+pcb_t* get_current_process(void) {
+    tcb_t* current = scheduler_current();
+    if (!current) return NULL;
+    return current->parent;
+}
+
+/* Fork current process with COW */
+int fork_process(void) {
+    pcb_t* parent = get_current_process();
+    if (!parent) {
+        uart_puts("fork: no current process\n");
+        return -1;
+    }
+    
+    uart_puts("fork: cloning process ");
+    uart_putu(parent->pid);
+    uart_puts("\n");
+    
+    /* Create new PCB */
+    pcb_t* child = (pcb_t*)zalloc(sizeof(pcb_t));
+    if (!child) {
+        uart_puts("fork: failed to allocate PCB\n");
+        return -1;
+    }
+    
+    child->pid = next_pid++;
+    child->parent = parent;
+    child->exit_code = 0;
+
+    /* Inherit process group and session from parent */
+    child->pgid = parent->pgid;
+    child->sid  = parent->sid;
+    child->is_stopped = 0;
+
+    /* Inherit credentials */
+    child->uid  = parent->uid;
+    child->gid  = parent->gid;
+
+    /* Inherit open file descriptors */
+    fd_clone(parent, child);
+
+    /* Copy signal handlers (but not pending signals) */
+    memcpy(&child->signals, &parent->signals, sizeof(signal_struct_t));
+    child->signals.pending = 0;  /* Child starts with no pending signals */
+    
+    /* Clone address space with COW */
+    if (!parent->mm || !parent->mm->pml4_phys) {
+        uart_puts("fork: parent has no address space\n");
+        return -1;
+    }
+    
+    child->mm = (mm_struct*)zalloc(sizeof(mm_struct));
+    if (!child->mm) {
+        uart_puts("fork: failed to allocate mm_struct\n");
+        return -1;
+    }
+    
+    child->mm->pml4_phys = paging_clone_cow(parent->mm->pml4_phys);
+    if (!child->mm->pml4_phys) {
+        uart_puts("fork: failed to clone page tables\n");
+        return -1;
+    }
+    
+    /* Clone main thread */
+    tcb_t* parent_thread = scheduler_current();
+    if (!parent_thread) {
+        uart_puts("fork: no current thread\n");
+        return -1;
+    }
+    
+    tcb_t* child_thread = (tcb_t*)zalloc(sizeof(tcb_t));
+    if (!child_thread) {
+        uart_puts("fork: failed to allocate TCB\n");
+        return -1;
+    }
+    
+    child_thread->tid = next_tid++;
+    child_thread->state = THREAD_READY;
+    child_thread->parent = child;
+    
+    /* Copy context from parent */
+    memcpy(&child_thread->context, &parent_thread->context, sizeof(cpu_context_t));
+    
+    /* Allocate kernel stack for child */
+    child_thread->kernel_stack = alloc_kernel_stack();
+    if (!child_thread->kernel_stack) {
+        uart_puts("fork: failed to allocate kernel stack\n");
+        return -1;
+    }
+    
+    child->main_thread = child_thread;
+    child->threads = child_thread;
+    child->next = NULL;
+    
+    /* Mark this child so syscall handler can return 0 to it */
+    child->is_fork_child = 1;
+    
+    /* Add child thread to scheduler */
+    scheduler_add_thread(child_thread);
+    
+    /* Add child to process list */
+    child->next = process_list;
+    process_list = child;
+    
+    /* Add child to parent's children list */
+    child->sibling_next = parent->children;
+    parent->children = child;
+    
+    uart_puts("fork: created child process ");
+    uart_putu(child->pid);
+    uart_puts("\n");
+    
+    /* Return child PID to parent, 0 to child (will be set when child runs) */
+    return (int)child->pid;
+}
+
+/* Find process by PID */
+pcb_t* find_process_by_pid(uint64_t pid) {
+    pcb_t* p = process_list;
+    while (p) {
+        if (p->pid == pid) {
+            return p;
+        }
+        p = p->next;
+    }
+    return NULL;
+}
+
+/* PATH search directories for bare executable names */
+static const char *exec_search_dirs[] = {
+    "/bin/", "/sbin/", "/usr/bin/", NULL
+};
+
+/* Resolve an executable path: absolute paths used directly,
+ * bare names searched in PATH directories.
+ * Returns 0 on success with *result set, or negative errno. */
+static int resolve_exec_path(const char *path, struct vnode **result) {
+    *result = NULL;
+
+    if (path[0] == '/') {
+        return vfs_resolve_path(path, result);
+    }
+
+    /* Bare name — try each PATH directory */
+    char fullpath[256];
+    for (int i = 0; exec_search_dirs[i]; i++) {
+        int pos = 0;
+        const char *d = exec_search_dirs[i];
+        while (*d && pos < 250) fullpath[pos++] = *d++;
+        const char *p = path;
+        while (*p && pos < 255) fullpath[pos++] = *p++;
+        fullpath[pos] = '\0';
+
+        if (vfs_resolve_path(fullpath, result) == 0 && *result)
+            return 0;
+    }
+    return -ENOENT;
+}
+
+/* Static buffer for reading ELF files during exec (128 KiB) */
+static char exec_elf_buf[128 * 1024];
+
+#define USER_STACK_TOP   0x800000000000ULL   /* just below 128 TiB */
+#define USER_STACK_PAGES 16                  /* 64 KiB stack */
+
+/* Replace current process image with new executable from file */
+int exec_process(const char* path, char* const argv[]) {
+    uart_puts("exec: loading ");
+    uart_puts(path);
+    uart_puts("\n");
+
+    pcb_t* proc = get_current_process();
+    if (!proc) return -ESRCH;
+    if (!path) return -EINVAL;
+
+    /* Resolve path (supports bare names via PATH search) */
+    struct vnode *vp = NULL;
+    int rc = resolve_exec_path(path, &vp);
+    if (rc != 0 || !vp) {
+        uart_puts("exec: not found: ");
+        uart_puts(path);
+        uart_puts("\n");
+        return -ENOENT;
+    }
+
+    /* Determine file size */
+    int64_t fsize = -1;
+    if (vp->v_op && vp->v_op->vop_getsize)
+        fsize = vp->v_op->vop_getsize(vp);
+    if (fsize <= 0 || fsize > (int64_t)sizeof(exec_elf_buf)) {
+        /* Fall back: try reading max buffer size */
+        fsize = (int64_t)sizeof(exec_elf_buf);
+    }
+
+    /* Read the ELF into kernel buffer */
+    int nbytes = vfs_read_at(vp, exec_elf_buf, (size_t)fsize, 0);
+    if (nbytes <= 0) {
+        uart_puts("exec: read failed\n");
+        return -EIO;
+    }
+
+    /* Destroy old address space, create fresh one */
+    if (proc->mm) mm_destroy(proc->mm);
+    proc->mm = mm_create();
+    if (!proc->mm) return -ENOMEM;
+
+    /* Load ELF segments into new address space */
+    uintptr_t entry = 0;
+    rc = elf_load_executable(exec_elf_buf, proc->mm->pml4_phys, &entry);
+    if (rc != 0) {
+        uart_puts("exec: ELF load error\n");
+        return -EINVAL;
+    }
+
+    /* Allocate user stack */
+    uintptr_t stack_base = USER_STACK_TOP - (USER_STACK_PAGES * PAGE_SIZE);
+    for (int i = 0; i < USER_STACK_PAGES; i++) {
+        uintptr_t frame = pfa_alloc_frame();
+        if (!frame) return -ENOMEM;
+        paging_map_page(proc->mm->pml4_phys, stack_base + i * PAGE_SIZE,
+                        frame, PTE_PRESENT | PTE_RW | PTE_USER);
+    }
+    mm_add_vma(proc->mm, stack_base, USER_STACK_TOP, VM_READ | VM_WRITE);
+
+    /* Update thread entry point */
+    tcb_t *thr = proc->main_thread;
+    if (thr) {
+        thr->context.rip = entry;
+        thr->context.rsp = USER_STACK_TOP - 8;
+        thr->context.rbp = 0;
+    }
+
+    /* Close non-stdio fds (close-on-exec) */
+    for (int i = 3; i < MAX_FILES; i++) {
+        if (proc->fd_table[i]) fd_close(proc, i);
+    }
+
+    /* Reset signal dispositions */
+    signal_init(&proc->signals);
+
+    (void)argv;
+    uart_puts("exec: loaded at entry 0x");
+    uart_putu(entry);
+    uart_puts("\n");
+    return 0;
+}
+
+/* Wait for child process to exit */
+int wait_process(int* status) {
+    return waitpid_process(-1, status, 0);
+}
+
+/* ---- Internal: remove a PCB from the global process_list ---- */
+static void process_list_remove(pcb_t* target) {
+    pcb_t** pp = &process_list;
+    while (*pp) {
+        if (*pp == target) {
+            *pp = target->next;
+            target->next = NULL;
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+/* Reap a zombie child: free its resources and remove from process list */
+void process_reap(pcb_t* child) {
+    if (!child) return;
+
+    uart_puts("[REAP] Freeing resources for PID ");
+    uart_putu(child->pid);
+    uart_puts("\n");
+
+    /* Close all open file descriptors. */
+    fd_close_all(child);
+
+    /* Free the address-space descriptor (mm_destroy is a no-op for pages
+     * in your bump allocator, but it marks the intent and will work once
+     * a real allocator is wired up). */
+    if (child->mm) {
+        mm_destroy(child->mm);
+        child->mm = NULL;
+    }
+
+    /* Remove from global process list so find_process_by_pid won't
+     * return a stale pointer. */
+    process_list_remove(child);
+
+    /* The PCB itself was bump-allocated (zalloc) and cannot be freed
+     * with the current allocator.  Zero it out so stale pointers are
+     * less dangerous. */
+    child->pid = 0;
+    child->is_zombie = 0;
+}
+
+/* Reparent all children of a dying process.
+ * Zombie children are reaped immediately (no parent will ever wait for
+ * them).  Living children are reparented to PID 1 (init) if it exists,
+ * otherwise they become root-less (parent == NULL). */
+void process_reparent_children(pcb_t* dying) {
+    if (!dying || !dying->children) return;
+
+    pcb_t* init_proc = find_process_by_pid(1);  /* May be NULL */
+
+    pcb_t* child = dying->children;
+    while (child) {
+        pcb_t* next_sib = child->sibling_next;
+
+        if (child->is_zombie) {
+            /* Nobody will ever wait() for it — reap now */
+            uart_puts("[REPARENT] Reaping orphaned zombie PID ");
+            uart_putu(child->pid);
+            uart_puts("\n");
+            process_reap(child);
+        } else if (init_proc && init_proc != dying) {
+            /* Reparent to init */
+            child->parent = init_proc;
+            child->sibling_next = init_proc->children;
+            init_proc->children = child;
+            uart_puts("[REPARENT] PID ");
+            uart_putu(child->pid);
+            uart_puts(" -> init (PID 1)\n");
+        } else {
+            /* No init — just detach */
+            child->parent = NULL;
+            child->sibling_next = NULL;
+        }
+
+        child = next_sib;
+    }
+    dying->children = NULL;
+}
+
+/* ================================================================
+ *  Job control helpers
+ * ================================================================ */
+
+/* Simple foreground-group table: maps session ID -> foreground pgid.
+ * With a single terminal this typically has one entry, but we
+ * support up to 8 concurrent sessions.                              */
+#define MAX_SESSIONS 8
+static struct {
+    uint64_t sid;
+    uint64_t fg_pgid;
+} fg_table[MAX_SESSIONS];
+
+void session_set_foreground(uint64_t sid, uint64_t pgid) {
+    /* Try to find existing entry */
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (fg_table[i].sid == sid) {
+            fg_table[i].fg_pgid = pgid;
+            uart_puts("[JOB] Session ");
+            uart_putu(sid);
+            uart_puts(" fg group -> ");
+            uart_putu(pgid);
+            uart_puts("\n");
+            return;
+        }
+    }
+    /* Allocate free slot (sid == 0 means unused) */
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (fg_table[i].sid == 0) {
+            fg_table[i].sid = sid;
+            fg_table[i].fg_pgid = pgid;
+            uart_puts("[JOB] New session ");
+            uart_putu(sid);
+            uart_puts(" fg group -> ");
+            uart_putu(pgid);
+            uart_puts("\n");
+            return;
+        }
+    }
+    uart_puts("[JOB] WARNING: no free session slot\n");
+}
+
+uint64_t session_get_foreground(uint64_t sid) {
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (fg_table[i].sid == sid) {
+            return fg_table[i].fg_pgid;
+        }
+    }
+    return 0;
+}
+
+int setpgid(pcb_t* proc, uint64_t pgid) {
+    if (!proc) return -1;
+    if (pgid == 0) pgid = proc->pid;
+    proc->pgid = pgid;
+    uart_puts("[JOB] PID ");
+    uart_putu(proc->pid);
+    uart_puts(" pgid -> ");
+    uart_putu(pgid);
+    uart_puts("\n");
+    return 0;
+}
+
+int setsid(pcb_t* proc) {
+    if (!proc) return -1;
+    /* Process becomes session leader: sid = pgid = pid */
+    proc->sid  = proc->pid;
+    proc->pgid = proc->pid;
+    /* Also register this session with the process as the initial fg group */
+    session_set_foreground(proc->sid, proc->pgid);
+    uart_puts("[JOB] PID ");
+    uart_putu(proc->pid);
+    uart_puts(" created new session ");
+    uart_putu(proc->sid);
+    uart_puts("\n");
+    return 0;
+}
+
+/* Send signal to every process in a process group */
+int signal_process_group(uint64_t pgid, int signo) {
+    int count = 0;
+    pcb_t* p = process_list;
+    while (p) {
+        if (p->pgid == pgid && p->pid != 0 && !p->is_zombie) {
+            signal_send(p, signo);
+            count++;
+        }
+        p = p->next;
+    }
+    uart_puts("[JOB] Sent signal ");
+    uart_putu(signo);
+    uart_puts(" to ");
+    uart_putu(count);
+    uart_puts(" process(es) in pgid ");
+    uart_putu(pgid);
+    uart_puts("\n");
+    return count;
+}
+
+/* Resume a stopped process */
+void process_continue(pcb_t* proc) {
+    if (!proc || !proc->is_stopped) return;
+    proc->is_stopped = 0;
+    uart_puts("[JOB] Continuing PID ");
+    uart_putu(proc->pid);
+    uart_puts("\n");
+    /* Re-add main thread to scheduler ready queue so it can run again */
+    if (proc->main_thread && proc->main_thread->state == THREAD_BLOCKED) {
+        proc->main_thread->state = THREAD_READY;
+        scheduler_add_thread(proc->main_thread);
+    }
+}
+
+/* Wait for specific child process or any child */
+int waitpid_process(int pid, int* status, int options) {
+    pcb_t* parent = get_current_process();
+    if (!parent) {
+        uart_puts("wait: no current process\n");
+        return -1;
+    }
+    
+    uart_puts("wait: PID ");
+    uart_putu(parent->pid);
+    uart_puts(" waiting for child ");
+    if (pid == -1) {
+        uart_puts("(any)\n");
+    } else {
+        uart_putu(pid);
+        uart_puts("\n");
+    }
+
+retry:
+    /* Check if there are any children at all */
+    if (!parent->children) {
+        uart_puts("wait: no children\n");
+        return -1;  /* ECHILD */
+    }
+    
+    /* Look for a zombie child matching the criteria */
+    pcb_t* prev = NULL;
+    pcb_t* child = parent->children;
+    
+    while (child) {
+        int matches = (pid == -1) || (child->pid == (uint64_t)pid);
+        
+        if (matches && child->is_zombie) {
+            uart_puts("wait: found zombie child PID ");
+            uart_putu(child->pid);
+            uart_puts(" with exit code ");
+            uart_putu(child->exit_code);
+            uart_puts("\n");
+            
+            if (status) {
+                *status = child->exit_code;
+            }
+            
+            uint64_t child_pid = child->pid;
+            
+            /* Remove child from parent's children list */
+            if (prev) {
+                prev->sibling_next = child->sibling_next;
+            } else {
+                parent->children = child->sibling_next;
+            }
+            
+            /* Free the child's resources */
+            process_reap(child);
+            
+            return (int)child_pid;
+        }
+        
+        prev = child;
+        child = child->sibling_next;
+    }
+    
+    /* No zombie child found yet */
+    if (options & WNOHANG) {
+        uart_puts("wait: WNOHANG — no zombie children, returning 0\n");
+        return 0;  /* POSIX: 0 means "children exist but none exited yet" */
+    }
+
+    /* ---------- Blocking wait ---------- */
+    uart_puts("wait: blocking PID ");
+    uart_putu(parent->pid);
+    uart_puts(" until a child exits\n");
+
+    /* Record which thread to wake up */
+    tcb_t* me = scheduler_current();
+    parent->wait_queue = me;
+    me->state = THREAD_BLOCKED;
+
+    /* Yield CPU — we won't run again until scheduler_thread_exit()
+     * (in the child) calls scheduler_add_thread() on us. */
+    scheduler_block_current();
+
+    /* We've been woken up — a child must have become a zombie.
+     * Go back and scan again. */
+    uart_puts("wait: PID ");
+    uart_putu(parent->pid);
+    uart_puts(" woke up, re-scanning children\n");
+    goto retry;
+}

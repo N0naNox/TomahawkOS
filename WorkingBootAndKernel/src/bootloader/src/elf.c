@@ -1,8 +1,5 @@
 /**
- * @file elf.c
- * @author ajxs
- * @date Aug 2019
- * @brief Functionality for working with ELF executable files.
+ * Functionality for working with ELF executable files.
  * Contains functionality to assist in loading and validating ELF executable
  * files. This functionality is essential to the ELF executable loader.
  */
