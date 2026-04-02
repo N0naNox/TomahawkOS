@@ -1,0 +1,32 @@
+# Force LF line endings for all text files so scripts work on WSL/Linux
+# without needing dos2unix after every pull.
+
+* text=auto eol=lf
+
+# Explicitly mark shell scripts
+*.sh text eol=lf
+rerun text eol=lf
+run text eol=lf
+
+# Makefiles / linker scripts / asm
+makefile text eol=lf
+Makefile text eol=lf
+*.ld text eol=lf
+*.asm text eol=lf
+
+# Source code
+*.c text eol=lf
+*.h text eol=lf
+*.py text eol=lf
+
+# Config files
+*.cfg text eol=lf
+*.md text eol=lf
+
+# Binary files — don't touch
+*.efi binary
+*.o binary
+*.so binary
+*.bin binary
+*.img binary
+*.iso binary
