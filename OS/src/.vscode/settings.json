@@ -1,6 +1,0 @@
-{
-    "files.associations": {
-        "paging.h": "c",
-        "page_fault_handler.h": "c"
-    }
-}
