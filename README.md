@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="TomahawkOS Logo" width="280"/>
+  <img src="assets/logo2.png" alt="TomahawkOS Logo" width="280"/>
 </p>
 
 <h1 align="center">TomahawkOS</h1>
