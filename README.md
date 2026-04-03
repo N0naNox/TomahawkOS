@@ -205,7 +205,7 @@ make clean      # Clean all build artifacts
 │                   User Space (Ring 3)            │
 │                    user_main.c                   │
 ├──────────────────────────────────────────────────┤
-│                  SYSCALL Interface                │
+│                  SYSCALL Interface               │
 ├──────────────────────────────────────────────────┤
 │  Shell    │  Scheduler  │  Signals  │  Pipes     │
 ├───────────┼─────────────┼───────────┼────────────┤
@@ -213,12 +213,12 @@ make clean      # Clean all build artifacts
 ├─────────────────────────┼────────────────────────┤
 │  FAT32    │  Block Dev  │  Frame Alloc │ Paging  │
 ├───────────┴─────────────┴────────────┴───────────┤
-│  Network Stack: ETH → ARP → IPv4 → UDP/TCP/ICMP │
+│  Network Stack: ETH → ARP → IPv4 → UDP/TCP/ICMP  │
 │  DHCP │ DNS │ HTTP                               │
 ├──────────────────────────────────────────────────┤
-│  e1000 NIC  │  ATA Disk  │  VGA  │  PS/2  │ TTY │
+│  e1000 NIC  │  ATA Disk  │  VGA  │  PS/2  │ TTY  │
 ├──────────────────────────────────────────────────┤
-│  IDT / GDT / Timer / HAL (Port I/O)             │
+│  IDT / GDT / Timer / HAL (Port I/O)              │
 ├──────────────────────────────────────────────────┤
 │              UEFI Bootloader (GNU-EFI)           │
 └──────────────────────────────────────────────────┘
