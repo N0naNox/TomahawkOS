@@ -229,7 +229,7 @@ make clean      # Clean all build artifacts
 ## Screenshots
 
 <p align="center">
-  <img src="assets/startScreen.png" alt="" width="300"/>
+  <img src="assets/startScreen.png" alt="Starting Screen" width="300"/>
 </p>
 
 ---
