@@ -228,7 +228,11 @@ make clean      # Clean all build artifacts
 
 ## Screenshots
 
-> *Coming soon*
+<p align="center">
+  <img src="assets/startScreen.png" alt="" width="300"/>
+  <img src="assets/help.png" alt="" width="300"/>
+  <img src="assets/files.png" alt="" width="300"/>
+</p>
 
 ---
 
