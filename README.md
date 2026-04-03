@@ -228,11 +228,11 @@ make clean      # Clean all build artifacts
 
 ## Screenshots
 
-<p align="center">
-  <img src="assets/startScreen.png" alt="" width="300"/>
-  <img src="assets/help.png" alt="" width="300"/>
-  <img src="assets/files.png" alt="" width="300"/>
-</p>
+![Boot Screen](assets/startScreen.png)
+
+![Help Menu](assets/help.png)
+
+![File System](assets/files.png)
 
 ---
 
